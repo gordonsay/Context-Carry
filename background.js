@@ -1,16 +1,22 @@
-chrome.action.onClicked.addListener((tab) => {
+chrome.action.onClicked.addListener(async (tab) => {
     const url = tab.url || "";
+    const isSupported = url.includes("chatgpt.com") ||
+                        url.includes("gemini.google.com") ||
+                        url.includes("claude.ai") ||
+                        url.includes("grok.com") ||
+                        url.includes("x.com");
 
-    if (url.includes("chatgpt.com") ||
-        url.includes("gemini.google.com") ||
-        url.includes("claude.ai") ||
-        url.includes("grok.com") ||
-        url.includes("x.com")) {
-
-        chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            files: ["content.js"]
-        });
+    if (isSupported) {
+        try {
+            await chrome.tabs.sendMessage(tab.id, { action: "TOGGLE_INTERFACE" });
+            console.log("Toggle signal sent.");
+        } catch (err) {
+            console.log("First time click, injecting content script...");
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ["content.js"]
+            });
+        }
 
     } else {
         chrome.scripting.executeScript({

@@ -1,27 +1,40 @@
 (function () {
     /* =========================================
+       0. Global State Management & Guard
+    ========================================= */
+    if (typeof window.ccManager === 'undefined') {
+        window.ccManager = {
+            active: false,
+            interval: null,
+            lang: 'en',
+            config: null
+        };
+    } else {
+        if (window.ccManager.toggleFn) {
+            window.ccManager.toggleFn();
+        }
+        return;
+    }
+
+    /* =========================================
        1. Language dictionary and settings
     ========================================= */
     const APP_CONFIG = {
-        // ChatGPT
         'chatgpt.com': {
             msgSelector: 'article',
             newChatUrl: 'https://chatgpt.com/?model=gpt-4o',
             ignore: '.sr-only, button, .cb-buttons'
         },
-        // Google Gemini
         'google.com': {
             msgSelector: 'user-query, model-response',
             newChatUrl: 'https://gemini.google.com/app',
             ignore: '.mat-icon, .action-button, .button-label, .botones-acciones'
         },
-        // Claude (Anthropic)
         'claude.ai': {
             msgSelector: 'div[data-testid="user-message"], div.font-claude-response',
             newChatUrl: 'https://claude.ai/new',
             ignore: 'button, .copy-icon, [data-testid="chat-message-actions"], .cursor-pointer'
         },
-        // Grok (x.com / grok.com)
         'grok': {
             msgSelector: '.message-bubble',
             newChatUrl: 'https://grok.com',
@@ -68,10 +81,8 @@
         }
     };
 
-    let curLang = 'en';
-
     /* =========================================
-       2. Environment detection and initialization
+       2. Environment detection
     ========================================= */
     const host = window.location.hostname;
     let config = null;
@@ -80,88 +91,180 @@
     else if (host.includes('google')) config = APP_CONFIG['google.com'];
     else if (host.includes('claude')) config = APP_CONFIG['claude.ai'];
     else if (host.includes('x.com') || host.includes('grok.com')) config = APP_CONFIG['grok'];
-    else return;
+    
+    window.ccManager.config = config;
 
-    if (document.getElementById('cc-panel')) {
-        document.getElementById('cc-panel').remove();
-        document.querySelectorAll('.cc-btn').forEach(e => e.remove());
-        const outlines = document.querySelectorAll('*');
-        outlines.forEach(el => {
-            if (el.style.outline.includes('#4CAF50')) el.style.outline = 'none';
-            if (el.dataset.ccPadding) { el.style.paddingLeft = ''; delete el.dataset.ccPadding; }
-        });
-        return;
-    }
+    if (!config) return;
 
     /* =========================================
-       3. Create UI panel
+       3. Main Functions: Open / Close / Toggle
     ========================================= */
-    const panel = document.createElement('div');
-    panel.id = 'cc-panel';
-    Object.assign(panel.style, {
-        position: 'fixed', top: '80px', right: '20px', zIndex: '2147483647',
-        background: '#1e1e1e', color: '#fff', padding: '16px', borderRadius: '12px',
-        boxShadow: '0 4px 20px rgba(0,0,0,0.5)', fontFamily: 'sans-serif',
-        width: '260px', border: '1px solid #444', textAlign: 'left', display: 'flex', flexDirection: 'column'
-    });
 
-    const header = document.createElement('div');
-    Object.assign(header.style, { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', borderBottom: '1px solid #444', paddingBottom: '8px' });
+    function openInterface() {
+        if (window.ccManager.active) return;
+        window.ccManager.active = true;
 
-    const title = document.createElement('div');
-    title.innerText = LANG_DATA[curLang].title;
-    title.style.fontWeight = 'bold';
-    title.style.fontSize = '14px';
+        console.log("Context-Carry: Enabled");
+        createPanel();
+        performScan();
+        window.ccManager.interval = setInterval(performScan, 3000);
+    }
+    function closeInterface() {
+        if (!window.ccManager.active) return;
+        window.ccManager.active = false;
 
-    const langBtn = document.createElement('button');
-    langBtn.innerText = '🌐 中/En';
-    langBtn.title = '切換語言';
-    Object.assign(langBtn.style, { background: 'transparent', border: '1px solid #555', color: '#aaa', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', padding: '2px 6px' });
-
-    header.append(title, langBtn);
-
-    const msg = document.createElement('div');
-    msg.innerText = LANG_DATA[curLang].status_scanning;
-    Object.assign(msg.style, { fontSize: '12px', color: '#aaa', marginBottom: '12px' });
-
-    const prefixLabel = document.createElement('div');
-    prefixLabel.innerText = LANG_DATA[curLang].label_prefix;
-    Object.assign(prefixLabel.style, { fontSize: '12px', color: '#ccc', marginBottom: '6px', fontWeight: 'bold' });
-
-    const prefixInput = document.createElement('textarea');
-    prefixInput.id = 'cc-prefix-input';
-    prefixInput.value = LANG_DATA[curLang].default_prompt;
-    prefixInput.placeholder = LANG_DATA[curLang].placeholder;
-    Object.assign(prefixInput.style, {
-        width: '100%', height: '150px', background: '#333', color: '#eee',
-        border: '1px solid #555', borderRadius: '6px', padding: '8px',
-        marginBottom: '12px', fontFamily: 'sans-serif', fontSize: '12px',
-        resize: 'vertical', boxSizing: 'border-box'
-    });
-
-    function createBtn(textKey, id, bg, extraStyle = {}) {
-        const b = document.createElement('button');
-        b.id = id;
-        b.innerText = LANG_DATA[curLang][textKey];
-        Object.assign(b.style, {
-            width: '100%', background: bg, color: '#fff', border: 'none',
-            padding: '8px', borderRadius: '6px', cursor: 'pointer', marginBottom: '8px',
-            fontSize: '13px', ...extraStyle
+        console.log("Context-Carry: Disabled");
+        if (window.ccManager.interval) {
+            clearInterval(window.ccManager.interval);
+            window.ccManager.interval = null;
+        }
+        const panel = document.getElementById('cc-panel');
+        if (panel) panel.remove();
+        document.querySelectorAll('.cc-btn').forEach(e => e.remove());
+        const processedElements = document.querySelectorAll('[data-cc-padding]');
+        
+        processedElements.forEach(el => {
+            el.style.paddingLeft = '';
+            const isSelected = el.dataset.ccSelected === 'true';
+            const hasGreenOutline = el.style.outline.includes('4CAF50') || el.style.outline.includes('76, 175, 80');
+            
+            if (isSelected || hasGreenOutline) {
+                el.style.outline = '';
+                el.style.outlineOffset = '';
+                el.style.backgroundColor = el.dataset.originalBg || '';
+            }
+            delete el.dataset.ccPadding;
+            delete el.dataset.ccSelected;
+            delete el.dataset.originalBg;
         });
-        return b;
     }
 
-    const btnDl = createBtn('btn_dl', 'cc-dl', '#2E7D32', { fontWeight: 'bold' });
-    const btnTransfer = createBtn('btn_transfer', 'cc-transfer', '#1565C0', { fontWeight: 'bold' });
-    const hr = document.createElement('hr');
-    Object.assign(hr.style, { border: '0', borderTop: '1px solid #333', margin: '8px 0', width: '100%' });
-    const btnScan = createBtn('btn_scan', 'cc-scan', '#444', { border: '1px solid #666', fontSize: '12px', padding: '6px' });
-
-    panel.append(header, msg, prefixLabel, prefixInput, btnDl, btnTransfer, hr, btnScan);
-    document.body.appendChild(panel);
+    function toggleInterface() {
+        if (window.ccManager.active) {
+            closeInterface();
+        } else {
+            openInterface();
+        }
+    }
+    window.ccManager.toggleFn = toggleInterface;
 
     /* =========================================
-       4. Language switch logic
+       4. UI Construction
+    ========================================= */
+    let title, msg, prefixLabel, prefixInput, btnDl, btnTransfer, btnScan;
+
+    function createPanel() {
+        if (document.getElementById('cc-panel')) return;
+
+        const curLang = window.ccManager.lang;
+        const t = LANG_DATA[curLang];
+
+        const panel = document.createElement('div');
+        panel.id = 'cc-panel';
+        Object.assign(panel.style, {
+            position: 'fixed', top: '80px', right: '20px', zIndex: '2147483647',
+            background: '#1e1e1e', color: '#fff', padding: '16px', borderRadius: '12px',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.5)', fontFamily: 'sans-serif',
+            width: '260px', border: '1px solid #444', textAlign: 'left', display: 'flex', flexDirection: 'column'
+        });
+
+        // Header
+        const header = document.createElement('div');
+        Object.assign(header.style, { display: 'flex', alignItems: 'center', marginBottom: '12px', borderBottom: '1px solid #444', paddingBottom: '8px' });
+
+        title = document.createElement('div');
+        title.innerText = t.title;
+        title.style.fontWeight = 'bold';
+        title.style.fontSize = '14px';
+        title.style.flexGrow = '1';
+
+        const langBtn = document.createElement('button');
+        langBtn.innerText = '🌐 中/En';
+        langBtn.title = 'Switch Language';
+        Object.assign(langBtn.style, { background: 'transparent', border: '1px solid #555', color: '#aaa', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', padding: '2px 6px', marginRight: '8px' });
+        
+        langBtn.onclick = function () {
+            const oldLang = window.ccManager.lang;
+            const newLang = oldLang === 'zh' ? 'en' : 'zh';
+            
+            const currentInput = prefixInput.value.trim();
+            const oldDefault = LANG_DATA[oldLang].default_prompt.trim();
+            if (currentInput === oldDefault) {
+                prefixInput.value = LANG_DATA[newLang].default_prompt;
+                flashInput(prefixInput);
+            }
+
+            window.ccManager.lang = newLang;
+            updateUITexts();
+        };
+
+        const closeBtn = document.createElement('button');
+        closeBtn.innerHTML = '&times;';
+        closeBtn.title = 'Close';
+        Object.assign(closeBtn.style, {
+            background: 'transparent', border: 'none', color: '#888', 
+            cursor: 'pointer', fontSize: '18px', padding: '0 4px', lineHeight: '1'
+        });
+        closeBtn.onmouseover = () => closeBtn.style.color = '#fff';
+        closeBtn.onmouseout = () => closeBtn.style.color = '#888';
+        closeBtn.onclick = closeInterface;
+
+        header.append(title, langBtn, closeBtn);
+
+        // Body
+        msg = document.createElement('div');
+        msg.innerText = t.status_scanning;
+        Object.assign(msg.style, { fontSize: '12px', color: '#aaa', marginBottom: '12px' });
+
+        prefixLabel = document.createElement('div');
+        prefixLabel.innerText = t.label_prefix;
+        Object.assign(prefixLabel.style, { fontSize: '12px', color: '#ccc', marginBottom: '6px', fontWeight: 'bold' });
+
+        prefixInput = document.createElement('textarea');
+        prefixInput.id = 'cc-prefix-input';
+        prefixInput.value = t.default_prompt;
+        prefixInput.placeholder = t.placeholder;
+        Object.assign(prefixInput.style, {
+            width: '100%', height: '150px', background: '#333', color: '#eee',
+            border: '1px solid #555', borderRadius: '6px', padding: '8px',
+            marginBottom: '12px', fontFamily: 'sans-serif', fontSize: '12px',
+            resize: 'vertical', boxSizing: 'border-box'
+        });
+
+        function createBtn(textKey, id, bg, extraStyle = {}) {
+            const b = document.createElement('button');
+            b.id = id;
+            b.innerText = t[textKey];
+            Object.assign(b.style, {
+                width: '100%', background: bg, color: '#fff', border: 'none',
+                padding: '8px', borderRadius: '6px', cursor: 'pointer', marginBottom: '8px',
+                fontSize: '13px', ...extraStyle
+            });
+            return b;
+        }
+
+        btnDl = createBtn('btn_dl', 'cc-dl', '#2E7D32', { fontWeight: 'bold' });
+        btnTransfer = createBtn('btn_transfer', 'cc-transfer', '#1565C0', { fontWeight: 'bold' });
+        
+        const hr = document.createElement('hr');
+        Object.assign(hr.style, { border: '0', borderTop: '1px solid #333', margin: '8px 0', width: '100%' });
+        
+        btnScan = createBtn('btn_scan', 'cc-scan', '#444', { border: '1px solid #666', fontSize: '12px', padding: '6px' });
+
+        btnDl.onclick = handleDownload;
+        btnTransfer.onclick = handleTransfer;
+        btnScan.onclick = function () {
+            performScan();
+            this.innerText = LANG_DATA[window.ccManager.lang].btn_scan_done;
+            setTimeout(() => this.innerText = LANG_DATA[window.ccManager.lang].btn_scan, 1000);
+        };
+
+        panel.append(header, msg, prefixLabel, prefixInput, btnDl, btnTransfer, hr, btnScan);
+        document.body.appendChild(panel);
+    }
+
+    /* =========================================
+       5. Logic & Utilities
     ========================================= */
     function flashInput(el) {
         el.style.transition = 'background 0.2s';
@@ -170,47 +273,36 @@
     }
 
     function updateUITexts() {
+        const curLang = window.ccManager.lang;
         const t = LANG_DATA[curLang];
-        title.innerText = t.title;
+        
+        if(title) title.innerText = t.title;
 
-        if (!msg.innerText.includes('Selected') && !msg.innerText.includes('選取')) {
-            msg.innerText = t.status_ready;
+        if (msg) {
+            if (!msg.innerText.includes('Selected') && !msg.innerText.includes('選取')) {
+                msg.innerText = t.status_ready;
+            }
+            const selectedCount = document.querySelectorAll('.cc-btn[data-selected="true"]').length;
+            if (selectedCount > 0) msg.innerText = t.msg_selected.replace('{n}', selectedCount);
         }
-        const selectedCount = document.querySelectorAll('.cc-btn[data-selected="true"]').length;
-        if (selectedCount > 0) msg.innerText = t.msg_selected.replace('{n}', selectedCount);
 
-        prefixLabel.innerText = t.label_prefix;
-        prefixInput.placeholder = t.placeholder;
-        btnDl.innerText = t.btn_dl;
-        btnTransfer.innerText = t.btn_transfer;
-        btnScan.innerText = t.btn_scan;
+        if(prefixLabel) prefixLabel.innerText = t.label_prefix;
+        if(prefixInput) prefixInput.placeholder = t.placeholder;
+        if(btnDl) btnDl.innerText = t.btn_dl;
+        if(btnTransfer) btnTransfer.innerText = t.btn_transfer;
+        if(btnScan) btnScan.innerText = t.btn_scan;
 
         document.querySelectorAll('.cc-btn').forEach(b => {
             if (b.innerText === '➕') b.title = t.btn_add_title;
         });
     }
 
-    langBtn.onclick = function () {
-        const oldLang = curLang;
-        const newLang = curLang === 'zh' ? 'en' : 'zh';
-
-        const currentInput = prefixInput.value.trim();
-        const oldDefault = LANG_DATA[oldLang].default_prompt.trim();
-
-        if (currentInput === oldDefault) {
-            prefixInput.value = LANG_DATA[newLang].default_prompt;
-            flashInput(prefixInput);
-        }
-        curLang = newLang;
-        updateUITexts();
-    };
-
-    /* =========================================
-       5. Core scan feature
-    ========================================= */
     function performScan() {
+        if (!window.ccManager.active) return;
+
         const els = document.querySelectorAll(config.msgSelector);
         let count = 0;
+        const curLang = window.ccManager.lang;
         const t = LANG_DATA[curLang];
 
         els.forEach(el => {
@@ -233,25 +325,11 @@
             btn.title = t.btn_add_title;
 
             Object.assign(btn.style, {
-                position: 'absolute',
-                top: '8px',
-                left: '6px',
-                zIndex: '9999',
-                background: '#fff',
-                color: '#333',
-                border: '1px solid #999',
-                fontWeight: '900',
-                padding: '0',
-                fontSize: '14px',
-                cursor: 'pointer',
-                borderRadius: '4px',
-                boxShadow: '0 2px 5px rgba(0,0,0,0.3)',
-                width: '24px',
-                height: '24px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                opacity: '1'
+                position: 'absolute', top: '8px', left: '6px', zIndex: '9999',
+                background: '#fff', color: '#333', border: '1px solid #999',
+                fontWeight: '900', padding: '0', fontSize: '14px', cursor: 'pointer',
+                borderRadius: '4px', boxShadow: '0 2px 5px rgba(0,0,0,0.3)',
+                width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center'
             });
 
             btn.onmouseenter = () => {
@@ -277,10 +355,11 @@
                     this.style.color = '#fff';
                     this.style.borderColor = '#4CAF50';
                     this.dataset.selected = 'true';
+                    el.dataset.ccSelected = 'true'; 
 
                     el.style.outline = '2px solid #4CAF50';
                     el.style.outlineOffset = '-2px';
-                    el.dataset.originalBg = el.style.backgroundColor;
+                    if (!el.dataset.originalBg) el.dataset.originalBg = el.style.backgroundColor;
                     el.style.backgroundColor = 'rgba(76, 175, 80, 0.1)';
                 } else {
                     this.innerText = '➕';
@@ -288,6 +367,7 @@
                     this.style.color = '#333';
                     this.style.borderColor = '#999';
                     delete this.dataset.selected;
+                    delete el.dataset.ccSelected;
 
                     el.style.outline = 'none';
                     el.style.backgroundColor = el.dataset.originalBg || '';
@@ -300,18 +380,14 @@
         });
 
         const total = document.querySelectorAll('.cc-btn').length;
-        if (count > 0 || total > 0) {
+        if ((count > 0 || total > 0) && msg) {
             msg.innerText = t.msg_detected.replace('{n}', total);
         }
     }
 
-    btnScan.onclick = function () {
-        performScan();
-        this.innerText = LANG_DATA[curLang].btn_scan_done;
-        setTimeout(() => this.innerText = LANG_DATA[curLang].btn_scan, 1000);
-    };
-
     function updateStatus() {
+        if (!msg) return;
+        const curLang = window.ccManager.lang;
         const n = document.querySelectorAll('.cc-btn[data-selected="true"]').length;
         msg.innerText = LANG_DATA[curLang].msg_selected.replace('{n}', n);
     }
@@ -329,7 +405,6 @@
 
             const myBtn = clone.querySelector('.cc-btn');
             if (myBtn) myBtn.remove();
-
             if (config.ignore) {
                 clone.querySelectorAll(config.ignore).forEach(bad => bad.remove());
             }
@@ -341,7 +416,8 @@
         return combined;
     }
 
-    btnDl.onclick = function () {
+    function handleDownload() {
+        const curLang = window.ccManager.lang;
         const t = LANG_DATA[curLang];
         const text = getSelectedText();
         if (!text) { alert(t.alert_no_selection); return; }
@@ -352,9 +428,10 @@
         a.download = 'chat-context-' + new Date().toISOString().slice(0, 10) + '.txt';
         a.click();
         URL.revokeObjectURL(url);
-    };
+    }
 
-    btnTransfer.onclick = function () {
+    function handleTransfer() {
+        const curLang = window.ccManager.lang;
         const t = LANG_DATA[curLang];
         const text = getSelectedText();
         if (!text) { alert(t.alert_no_selection); return; }
@@ -363,9 +440,14 @@
                 window.open(config.newChatUrl, '_blank');
             }
         }).catch(err => alert(t.alert_copy_fail));
-    };
+    }
 
-    setTimeout(performScan, 1500);
-    setInterval(performScan, 3000);
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request.action === "TOGGLE_INTERFACE") {
+            toggleInterface();
+        }
+    });
+
+    openInterface();
 
 })();
