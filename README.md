@@ -60,8 +60,8 @@ Pull requests are welcome. For major changes, please open an issue first to disc
 Clone the repo:
    ```bash
    git clone https://github.com/gordonsay/Context-Carry.git
+   ```
 
----
 
 ## Disclaimer
 
