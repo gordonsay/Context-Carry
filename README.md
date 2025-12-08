@@ -25,6 +25,10 @@ Stop manually copying and pasting massive walls of text. Select specific message
   - **Download as .txt**: Save the conversation history locally.
 - **Privacy First**: Runs 100% locally in your browser. No data is sent to external servers.
 
+## Screenshots
+
+![Selection UI](screenshots/screenshot_claude.png)
+
 ## Installation
 
 ### From Chrome Web Store

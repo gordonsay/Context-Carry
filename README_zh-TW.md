@@ -8,6 +8,10 @@
 
 ---
 
+## 截圖
+
+![Selection UI](screenshots/screenshot_claude.png)
+
 ## 功能特色
 
 - **多平台支援**：
