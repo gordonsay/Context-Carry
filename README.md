@@ -61,6 +61,8 @@ Clone the repo:
    ```bash
    git clone https://github.com/gordonsay/Context-Carry.git
 
+---
+
 ## Disclaimer
 
 This extension is not affiliated with OpenAI, Anthropic, Google, or xAI.  
