@@ -1,0 +1,33 @@
+{
+    "manifest_version": 3,
+    "name": "Context-Carry - AI Conversation Transfer",
+    "version": "1.0",
+    "description": "Select messages from ChatGPT, Claude, Gemini, or Grok and transfer them as context to a new AI chat.",
+    "permissions": [
+        "activeTab",
+        "scripting"
+    ],
+    "host_permissions": [
+        "https://chatgpt.com/*",
+        "https://gemini.google.com/*",
+        "https://claude.ai/*",
+        "https://x.com/*",
+        "https://grok.com/*"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "action": {
+        "default_title": "Open Context-Carry",
+        "default_icon": {
+            "16": "icons/icon16.png",
+            "48": "icons/icon48.png",
+            "128": "icons/icon128.png"
+        }
+    },
+    "icons": {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    }
+}
