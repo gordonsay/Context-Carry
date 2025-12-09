@@ -58,6 +58,8 @@
             placeholder: '在此輸入要給 AI 的前導指令...',
             btn_scan: '重新掃描頁面',
             btn_scan_done: '已重新掃描',
+            btn_select_all: '全選所有訊息',
+            btn_unselect_all: '取消全選',
             btn_dl: '輸出為 .txt',
             btn_copy: '複製到剪貼簿',
             label_transfer: '轉移並開啟 (Cross-LLM):',
@@ -77,6 +79,8 @@
             label_prefix: 'Custom Prefix (System Prompt):',
             placeholder: 'Enter instructions for the AI here...',
             btn_scan: 'Rescan Page',
+            btn_select_all: 'Select All',
+            btn_unselect_all: 'Unselect All',
             btn_scan_done: 'Scanned',
             btn_dl: 'Export to .txt',
             btn_copy: 'Copy to Clipboard',
@@ -162,7 +166,7 @@
     /* =========================================
        4. UI Construction
     ========================================= */
-    let title, msg, prefixLabel, prefixInput, btnDl, btnCopy, btnScan, transferLabel, transferContainer;
+    let title, msg, prefixLabel, prefixInput, btnDl, btnCopy, btnScan, transferLabel, transferContainer, btnSelectAll, btnUnselectAll;
 
     function createPanel() {
         if (document.getElementById('cc-panel')) return;
@@ -239,13 +243,10 @@
         });
 
         // Basic Actions Row (Download & Copy)
-        const actionRow = document.createElement('div');
-        Object.assign(actionRow.style, { display: 'flex', gap: '8px', marginBottom: '12px' });
-
         function createBtn(textKey, bg, onClick) {
             const b = document.createElement('button');
             b.innerText = t[textKey];
-            b.dataset.key = textKey; // for updateUITexts
+            b.dataset.key = textKey;
             Object.assign(b.style, {
                 flex: '1', background: bg, color: '#fff', border: 'none',
                 padding: '8px', borderRadius: '6px', cursor: 'pointer',
@@ -254,7 +255,13 @@
             b.onclick = onClick;
             return b;
         }
-
+        const selectionRow = document.createElement('div');
+        Object.assign(selectionRow.style, { display: 'flex', gap: '8px', marginBottom: '8px' });
+        btnSelectAll = createBtn('btn_select_all', '#1976D2', handleSelectAll);
+        btnUnselectAll = createBtn('btn_unselect_all', '#555', handleUnselectAll);
+        selectionRow.append(btnSelectAll, btnUnselectAll);
+        const actionRow = document.createElement('div');
+        Object.assign(actionRow.style, { display: 'flex', gap: '8px', marginBottom: '12px' });
         btnDl = createBtn('btn_dl', '#2E7D32', handleDownload);
         btnCopy = createBtn('btn_copy', '#555', handleCopyOnly);
         actionRow.append(btnDl, btnCopy);
@@ -294,7 +301,7 @@
         });
         btnScan.style.border = '1px solid #666';
 
-        panel.append(header, msg, prefixLabel, prefixInput, actionRow, transferLabel, transferContainer, hr, btnScan);
+        panel.append(header, msg, prefixLabel, prefixInput, selectionRow, actionRow, transferLabel, transferContainer, hr, btnScan);
         document.body.appendChild(panel);
     }
 
@@ -323,6 +330,8 @@
 
         if (prefixLabel) prefixLabel.innerText = t.label_prefix;
         if (prefixInput) prefixInput.placeholder = t.placeholder;
+        if (btnSelectAll) btnSelectAll.innerText = t.btn_select_all;
+        if (btnUnselectAll) btnUnselectAll.innerText = t.btn_unselect_all;
         if (btnDl) btnDl.innerText = t.btn_dl;
         if (btnCopy) btnCopy.innerText = t.btn_copy;
         if (transferLabel) transferLabel.innerText = t.label_transfer;
@@ -498,6 +507,34 @@
             alert("Storage access failed. Please update extension permissions.");
             window.open(targetUrl, '_blank');
         }
+    }
+
+    function handleSelectAll() {
+        const btns = document.querySelectorAll('.cc-btn');
+        let changed = false;
+
+        btns.forEach(btn => {
+            if (btn.dataset.selected !== 'true') {
+                btn.click();
+                changed = true;
+            }
+        });
+
+        if (changed) updateStatus();
+    }
+
+    function handleUnselectAll() {
+        const btns = document.querySelectorAll('.cc-btn');
+        let changed = false;
+
+        btns.forEach(btn => {
+            if (btn.dataset.selected === 'true') {
+                btn.click();
+                changed = true;
+            }
+        });
+
+        if (changed) updateStatus();
     }
 
     /* =========================================

@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Context-Carry - AI Conversation Transfer",
-    "version": "1.1",
+    "version": "1.2",
     "description": "Stop losing context! Export chat history from ChatGPT, Claude, Gemini & Grok. Seamless Cross-LLM transfer & prompt management.",
     "permissions": [
         "activeTab",

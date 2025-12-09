@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ------------------------------------------------------------------------
 
+## [1.2] - 2025-12-09
+
+### Added
+- **Bulk Selection:** Added **"Select All"** and **"Unselect All"** buttons to the control panel, allowing users to quickly select or deselect all detected messages.
+- **Localization:** Updated language files to support Chinese/English switching for the new selection buttons.
+
+### Changed
+- **UI Layout:** Refactored the control panel layout to insert the selection toolbar above the action buttons.
+- **Code Refactoring:** Optimized `createBtn` function in `content.js` for better reusability across UI components.
+
+------------------------------------------------------------------------
+
 ## [1.1] - 2025-12-09
 
 ### Added
