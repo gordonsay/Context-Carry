@@ -1,7 +1,7 @@
 # Context-Carry: Cross-LLM Chat History Export & Context Manager
 
 [![中文說明](https://img.shields.io/badge/Language-繁體中文-blue)](README_zh-TW.md)
-![Version](https://img.shields.io/badge/version-1.1-blue)
+![Version](https://img.shields.io/badge/version-1.3-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **Stop losing your context when switching AIs.**
