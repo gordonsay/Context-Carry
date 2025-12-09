@@ -16,18 +16,13 @@ Stop manually copying and pasting massive walls of text. Select specific message
 
 ## Features
 
-- **Seamless Cross-LLM Transfer**: Instantly move context between:
-  - ChatGPT 🤖
-  - Claude.ai 🧠
-  - Google Gemini 💎
-  - Grok (X.com) ✖️
-- **Magic Auto-Fill**: No more `Ctrl+V`. The extension opens the new AI platform and **automatically pastes** your context into the input box.
-- **Smart Selection**: Non-intrusive checkboxes allow you to pick exactly which messages to export.
-- **Prompt Management**: Save and insert your own "System Prompt" to guide the new AI's behavior.
-- **Save ChatGPT Conversation**:
-  - **Copy to Clipboard**: Backup your chat history manually.
-  - **Download as .txt**: Archive your valuable conversation locally.
-- **Privacy First**: Runs 100% locally in your browser. No data is sent to external servers.
+- **Seamless Cross-LLM Transfer**: Instantly move context between ChatGPT 🤖, Claude.ai 🧠, Google Gemini 💎, and Grok ✖️.
+- **Context Basket (New!)**: Collect conversation fragments from multiple windows/tabs into a staging area, then transfer them all at once.
+- **Draggable Interface (New!)**: The panel is now draggable, so it never blocks your view.
+- **Range Selection (New!)**: Use **Shift + Click** to instantly select a long list of messages.
+- **Magic Auto-Fill**: Automatically opens the target AI platform and pastes your context.
+- **Prompt Management**: Save custom system prompts to guide the AI.
+- **Privacy First**: Runs 100% locally. Basket data is auto-cleared on browser restart.
 
 ## Screenshots
 
@@ -47,13 +42,18 @@ Coming soon.
 
 ## How to Use
 
-1. Open a chat on any supported AI platform (e.g., ChatGPT).
-2. Click the **Context-Carry** icon in your browser toolbar.
-3. Click **"Rescan Page"** if the selection buttons don't appear automatically.
-4. Click the **➕** buttons next to the messages you want to keep. They will turn into green **✓** checks.
-5. (Optional) Enter a custom instruction in the "Custom Prefix" box (e.g., *"Summarize the following context..."*).
-6. **Transfer**: Click the icon of the **Target Platform** (e.g., click **Gemini 💎**).
-7. The new platform will open, and the text will be **automatically filled** in the input box. Just press Enter to send!
+1. Open a chat on any supported AI platform.
+2. Click the **Context-Carry** icon.
+3. **Select Messages**:
+   - Click **➕** to select single messages.
+   - **Hold Shift + Click** to select a range of messages.
+4. **Transfer Options**:
+   - **Direct Transfer**: Click a target platform icon (e.g., Gemini 💎) to open a new tab with the selected text.
+   - **Context Basket (Multi-Window)**:
+     1. Click **"Add (+)"** to save selection to the basket.
+     2. Go to another tab/window and add more content if needed.
+     3. Open the target AI window and click **"Paste Here"** to fill all collected content.
+5. **Basket Management**: Click the arrow (▼) in the basket section to preview, drag-to-reorder, or delete items.
 
 ## Privacy
 

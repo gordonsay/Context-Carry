@@ -1,6 +1,6 @@
 # Privacy Policy for Context Carry
 
-**Last Updated:** December 09, 2025
+**Last Updated:** December 10, 2025
 
 This Privacy Policy describes how **Context Carry** ("we", "us", or "our") handles your information when you use our browser extension.
 
@@ -14,7 +14,10 @@ Context Carry is designed to function locally within your web browser.
 - **No Analytics:** We do not track your usage behavior or collect anonymous statistics.
 - **Local Storage:** We use your browser's local storage (`chrome.storage`) for two specific purposes:
   1. To save your **user preferences** (such as your custom prompt templates).
-  2. To **temporarily store selected conversation text** when you initiate a transfer to another AI platform. This allows the extension to automatically fill the content in the new tab. This data is stored locally and is automatically cleared after the transfer is complete.
+  2. To **temporarily store selected conversation text** for the "Auto-Fill" and "Context Basket" features.
+     - **Transfer Data:** Temporary text used for cross-tab transfer.
+     - **Context Basket:** Text stored in the staging area allows you to aggregate content from multiple sources.
+     - **Data Cleanup:** Basket data remains locally until you manually clear it or **restart your browser**. We implemented an auto-cleanup mechanism that wipes all temporary storage upon browser startup to ensure privacy.
 
 ## 2. Permissions
 

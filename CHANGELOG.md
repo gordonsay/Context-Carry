@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ------------------------------------------------------------------------
 
+## [1.3] - 2025-12-10
+
+### Added
+- **Context Basket (Staging Area):** Introduced a cross-window "Basket" system. Users can now collect conversation fragments from multiple tabs/windows and aggregate them into a single transfer.
+- **Draggable Interface:** The control panel is now draggable via the header, preventing it from blocking underlying page content.
+- **Range Selection:** Added **Shift + Click** functionality to select a continuous range of messages instantly.
+- **Basket Management:**
+  - **Preview List:** Added a collapsible preview area to manage items in the basket.
+  - **Drag-and-Drop Sorting:** Users can reorder basket items by dragging them in the preview list.
+  - **Smart Tooltips:** Added floating tooltips to preview the full content of basket items on hover.
+
+### Changed
+- **UI UX:** Updated the main panel layout to include the new **Context Basket** section.
+- **Privacy:** Implemented auto-cleanup logic to clear basket data on browser startup for better security.
+
+------------------------------------------------------------------------
+
 ## [1.2] - 2025-12-09
 
 ### Added

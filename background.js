@@ -25,3 +25,10 @@ chrome.action.onClicked.addListener(async (tab) => {
         });
     }
 });
+
+
+chrome.runtime.onStartup.addListener(() => {
+    chrome.storage.local.remove(['cc_basket', 'cc_transfer_payload'], () => {
+        console.log("Context-Carry: Privacy cleanup done. Storage cleared on startup.");
+    });
+});
