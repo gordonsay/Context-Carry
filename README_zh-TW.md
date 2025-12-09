@@ -82,3 +82,22 @@
 ## 免責聲明
 
 本擴充功能與 OpenAI、Anthropic、Google、xAI 無任何隸屬或合作關係。 所有產品名稱、商標與品牌皆屬於其各自擁有者。
+
+## 更新日誌
+
+請參閱 [CHANGELOG.md](CHANGELOG.md) 以獲取更新日誌。
+
+
+## 授權
+
+本專案採用 MIT 授權 - 詳細內容請參考 [LICENSE](LICENSE) 檔案。
+
+
+## 連絡方式
+
+如需任何幫助，請在 [GitHub repository](https://github.com/gordonsay/Context-Carry) 上建立 Issue。
+
+
+## 注意事項
+
+由於瀏覽器安全性限制，檔案附件（PDF/圖片）無法自動轉移。

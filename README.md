@@ -76,3 +76,22 @@ Clone the repo:
 
 This extension is not affiliated with OpenAI, Anthropic, Google, or xAI.  
 All product names, logos, and brands are property of their respective owners.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a list of changes and updates.
+
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+
+## Contact
+
+For questions or support, please open an issue on the [GitHub repository](https://github.com/gordonsay/Context-Carry).
+
+
+## Note
+
+Due to browser security restrictions, file attachments (PDF/Images) cannot be transferred automatically.
