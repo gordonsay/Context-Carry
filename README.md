@@ -31,7 +31,7 @@ Stop manually copying and pasting massive walls of text. Select specific message
 
 ## Screenshots
 
-![Selection UI](screenshots/screenshot_claude.png)
+![Selection UI](screenshots/screenshot_gpt.png)
 
 ## Installation
 

@@ -12,7 +12,7 @@
 
 ## 截圖
 
-![Selection UI](screenshots/screenshot_claude.png)
+![Selection UI](screenshots/screenshot_gpt.png)
 
 ## 功能特色
 
