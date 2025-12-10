@@ -85,7 +85,16 @@
             preview_drag_hint: '可拖曳排序 ⇅ (懸停可看詳情)',
             token_est: '📊 預估 Token:',
             token_warn_title: '⚠️ Token 數量警告',
-            token_warn_msg: '預估內容 ({est}) 超過了 {platform} 的建議限制 ({limit})。\n\n強行轉移可能會導致記憶遺失。\n是否仍要繼續？'
+            token_warn_msg: '預估內容 ({est}) 超過了 {platform} 的建議限制 ({limit})。\n\n強行轉移可能會導致記憶遺失。\n是否仍要繼續？',
+            btn_paint: '🖌️ 圈選',
+            paint_tooltip: '圈選畫面區域文字 (Area Select)',
+            toast_enter_paint: '進入圈選模式 (按 ESC 退出)',
+            paint_no_text: '未選取到任何文字',
+            preview_title: '📝 <b>確認擷取內容 (Preview)</b>',
+            preview_words: '字數',
+            preview_cancel: '取消',
+            preview_confirm: '加入採集籃',
+            source_area_select: ' (圈選)'
         },
         'en': {
             title: 'Context-Carry',
@@ -120,7 +129,16 @@
             preview_drag_hint: 'Drag to reorder ⇅ (Hover for details)',
             token_est: '📊 Est. Tokens:',
             token_warn_title: '⚠️ Token Limit Warning',
-            token_warn_msg: 'Content ({est}) exceeds recommended limit for {platform} ({limit}).\n\nTransferring may cause memory loss.\nDo you want to proceed?'
+            token_warn_msg: 'Content ({est}) exceeds recommended limit for {platform} ({limit}).\n\nTransferring may cause memory loss.\nDo you want to proceed?',
+            btn_paint: '🖌️ Select',
+            paint_tooltip: 'Select area of text (Area Select)',
+            toast_enter_paint: 'Entered selection mode (Press ESC to exit)',
+            paint_no_text: 'No text selected',
+            preview_title: '📝 <b>Confirm selection (Preview)</b>',
+            preview_words: 'Chars',
+            preview_cancel: 'Cancel',
+            preview_confirm: 'Add to Basket',
+            source_area_select: ' (Area Select)'
         }
     };
 
@@ -129,7 +147,6 @@
         const style = document.createElement('style');
         style.id = 'cc-styles';
         style.textContent = `
-            /* Entry animation for the panel */
             #cc-panel {
                 transform: translateX(30px);
                 opacity: 0;
@@ -143,8 +160,6 @@
                 transform: translateX(0);
                 opacity: 1;
             }
-
-            /* Colour variables for light mode */
             #cc-panel {
                 --cc-bg: #ffffff;
                 --cc-text: #334155;
@@ -162,7 +177,6 @@
                 --gem-bg: #eff6ff; --gem-text: #2563eb; --gem-border: #bfdbfe;
                 --grk-bg: #f3f4f6; --grk-text: #1f2937; --grk-border: #e5e7eb;
             }
-            /* Override variables for dark mode when data‑theme="dark" */
             #cc-panel[data-theme="dark"] {
                 --cc-bg: #1e1e1e;
                 --cc-text: #e2e8f0;
@@ -179,7 +193,6 @@
                 --grk-bg: rgba(255,255,255,0.1); --grk-text: #e5e7eb; --grk-border: rgba(255,255,255,0.2);
             }
 
-            /* Base panel styles */
             #cc-panel.cc-panel {
                 width: 260px;
                 background: var(--cc-bg);
@@ -193,7 +206,6 @@
                 flex-direction: column;
             }
 
-            /* Header */
             #cc-panel .cc-header {
                 display: flex;
                 justify-content: space-between;
@@ -236,14 +248,12 @@
                 color: var(--cc-text);
             }
 
-            /* Status message */
             #cc-panel .cc-msg {
                 font-size: 11px;
                 color: var(--cc-text-sub);
                 margin-bottom: 8px;
             }
 
-            /* Platform grid */
             #cc-panel .cc-grid {
                 display: grid;
                 grid-template-columns: 1fr 1fr;
@@ -270,13 +280,11 @@
                 font-style: normal;
                 font-size: 16px;
             }
-            /* Platform colour variations */
             #cc-panel .p-chatgpt { background: var(--gpt-bg); color: var(--gpt-text); border-color: var(--gpt-border); }
             #cc-panel .p-claude { background: var(--cld-bg); color: var(--cld-text); border-color: var(--cld-border); }
             #cc-panel .p-gemini { background: var(--gem-bg); color: var(--gem-text); border-color: var(--gem-border); }
             #cc-panel .p-grok { background: var(--grk-bg); color: var(--grk-text); border-color: var(--grk-border); }
 
-            /* Tools row */
             #cc-panel .cc-tools {
                 display: flex;
                 gap: 6px;
@@ -299,7 +307,6 @@
                 border-color: var(--cc-text-sub);
             }
 
-            /* Drawer toggle */
             #cc-panel .cc-drawer-toggle {
                 text-align: center;
                 color: var(--cc-text-sub);
@@ -313,7 +320,6 @@
                 color: var(--cc-text);
             }
 
-            /* Drawer */
             #cc-panel .cc-drawer {
                 max-height: 0;
                 overflow: hidden;
@@ -335,7 +341,6 @@
                 display: inline-block;
             }
 
-            /* Drawer internal elements */
             #cc-panel .cc-input {
                 width: 100%;
                 box-sizing: border-box;
@@ -347,7 +352,9 @@
                 font-size: 11px;
                 margin-bottom: 8px;
                 resize: vertical;
-                height: 50px;
+                height: 120px;
+                min-height: 80px;
+                line-height: 1.4;
             }
             #cc-panel .basket-info {
                 display: flex;
@@ -371,7 +378,6 @@
                 border: 1px dashed var(--cc-border);
                 border-radius: 6px;
             }
-            /* Basket item animations remain from original */
             #cc-panel .cc-basket-item {
                 transition: all 0.3s ease;
                 opacity: 1;
@@ -387,7 +393,6 @@
                 padding: 0 !important;
                 overflow: hidden;
             }
-            /* Scrollbar styling */
             #cc-panel ::-webkit-scrollbar { width: 6px; }
             #cc-panel ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
             #cc-panel ::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
@@ -409,7 +414,6 @@
 
     window.ccManager.config = config;
 
-    if (!config) return;
 
     function convertToMarkdown(element) {
         const clone = element.cloneNode(true);
@@ -494,8 +498,10 @@
             if (panel) panel.classList.add('cc-visible');
         }, 10);
 
-        performScan();
-        window.ccManager.interval = setInterval(performScan, 3000);
+        if (window.ccManager.config) {
+            performScan();
+            window.ccManager.interval = setInterval(performScan, 3000);
+        }
         checkAutoFill();
         updateBasketUI();
     }
@@ -549,11 +555,20 @@
     /* =========================================
        4. UI Construction
     ========================================= */
-    let title, msg, prefixLabel, prefixInput, btnDl, btnCopy, btnScan, transferLabel, transferContainer, btnSelectAll, btnUnselectAll;
+    let title, msg, prefixLabel, prefixInput, btnDl, btnCopy, btnScan, btnPaint, transferLabel, transferContainer, btnSelectAll, btnUnselectAll;
     let basketLabel, basketStatus, btnAddBasket, btnClearBasket, btnPasteBasket, basketPreviewList;
     let tooltip;
 
     function createPanel() {
+        if (!window.ccManager.config) {
+             msg.style.display = 'none';
+             btnSelectAll.style.display = 'none';
+             btnUnselectAll.style.display = 'none';
+             transferContainer.style.display = 'none'; 
+             if(transferLabel) transferLabel.style.display = 'none';
+             const curLang = window.ccManager.lang;
+             title.textContent = curLang === 'zh' ? 'Context-Carry (採集模式)' : 'Context-Carry (Collector)';
+        }
         if (document.getElementById('cc-panel')) return;
         const curLang = window.ccManager.lang;
         const t = LANG_DATA[curLang];
@@ -680,6 +695,10 @@
             panel.classList.toggle('expanded');
         };
 
+        if (!window.ccManager.config) {
+            btnScan.style.display = 'none';
+        }
+
         const drawer = document.createElement('div');
         drawer.className = 'cc-drawer';
 
@@ -736,6 +755,15 @@
         tokenDisplay.style.textAlign = 'right';
         tokenDisplay.style.fontWeight = 'bold';
         tokenDisplay.textContent = `${t.token_est} 0`;
+        btnPaint = document.createElement('button');
+        btnPaint.className = 'tool-btn';
+        btnPaint.innerText = t.btn_paint;
+        btnPaint.title = t.paint_tooltip;
+        btnPaint.onclick = () => {
+            toggleSelectionMode();
+            const p = document.getElementById('cc-panel');
+            if (p) p.style.opacity = '0.2';
+        };
 
         const extraActions = document.createElement('div');
         extraActions.className = 'cc-tools';
@@ -753,7 +781,7 @@
                 this.textContent = LANG_DATA[window.ccManager.lang].btn_scan;
             }, 1000);
         };
-        extraActions.append(btnDl, btnScan);
+        extraActions.append(btnPaint, btnDl, btnScan);
         drawer.append(prefixLabel, prefixInput, basketInfo, basketBtnRow, basketPreviewList, tokenDisplay, extraActions);
         panel.append(header, msg, transferLabel, transferContainer, toolsRow, drawerToggle, drawer);
         document.body.appendChild(panel);
@@ -830,6 +858,10 @@
         updateBasketUI();
         if (transferLabel) transferLabel.innerText = t.label_transfer;
         if (btnScan) btnScan.innerText = t.btn_scan;
+        if (btnPaint) {
+            btnPaint.innerText = t.btn_paint;
+            btnPaint.title = t.paint_tooltip;
+        }
 
         document.querySelectorAll('.cc-btn').forEach(b => {
             if (b.innerText === '➕') b.title = t.btn_add_title;
@@ -838,8 +870,9 @@
 
     function performScan() {
         if (!window.ccManager.active) return;
+        if (!window.ccManager.config || !window.ccManager.config.msgSelector) return;
 
-        const els = document.querySelectorAll(config.msgSelector);
+        const els = document.querySelectorAll(window.ccManager.config.msgSelector);
         let count = 0;
         const curLang = window.ccManager.lang;
         const t = LANG_DATA[curLang];
@@ -956,48 +989,168 @@
         msg.innerText = LANG_DATA[curLang].msg_selected.replace('{n}', n);
     }
 
-    function getSelectedText() {
+    function getSelectedText(includePrefix = true) {
         const selected = document.querySelectorAll('.cc-btn[data-selected="true"]');
         if (selected.length === 0) return null;
 
-        const userPrefix = document.getElementById('cc-prefix-input').value;
-        let combined = userPrefix + "\n\n====================\n\n";
+        let combined = "";
+        if (includePrefix) {
+            const userPrefix = document.getElementById('cc-prefix-input').value;
+            if(userPrefix) combined += userPrefix + "\n\n====================\n\n";
+        }
 
         selected.forEach(btn => {
             const textContent = convertToMarkdown(btn.parentElement);
             combined += `--- Fragment ---\n${textContent}\n\n`;
         });
-        combined += "====================\n[END OF CONTEXT]";
+        
+        if (includePrefix) {
+            combined += "====================\n[END OF CONTEXT]";
+        }
         return combined;
     }
 
+    function constructFinalContent(pageSelection, basketItems) {
+        const prefix = document.getElementById('cc-prefix-input')?.value || "";
+        let finalContent = "";
+        
+        if (prefix) {
+            finalContent += prefix + "\n\n====================\n\n";
+        }
+
+        if (pageSelection) {
+            finalContent += pageSelection + "\n\n";
+        }
+
+        if (basketItems && basketItems.length > 0) {
+            if (pageSelection) finalContent += "\n========== [ BASKET CONTENT ] ==========\n\n";
+            
+            const basketText = basketItems.map((item, idx) => 
+                `[Basket Item ${idx + 1} from ${item.source}]\n${item.text}`
+            ).join("\n\n--------------------\n\n");
+            
+            finalContent += basketText;
+        }
+
+        finalContent += "\n\n====================\n[END OF CONTEXT]";
+        return finalContent;
+    }
+
+    function resolveContentToExport(callback) {
+        const t = LANG_DATA[window.ccManager.lang];
+        
+        getBasket((basket) => {
+            const pageText = getSelectedText(false);
+            const hasBasket = (basket && basket.length > 0);
+            const hasPage = (pageText && pageText.length > 0);
+
+            if (!hasPage && !hasBasket) {
+                alert(t.alert_no_selection);
+                return;
+            }
+
+            if (hasPage && hasBasket) {
+                showExportChoiceModal(pageText, basket, (choice) => {
+                    let finalContent = "";
+                    if (choice === 'page') {
+                        finalContent = constructFinalContent(pageText, []);
+                    } else if (choice === 'basket') {
+                        finalContent = constructFinalContent(null, basket);
+                    } else {
+                        finalContent = constructFinalContent(pageText, basket);
+                    }
+                    callback(finalContent);
+                });
+            } 
+            else {
+                const finalContent = constructFinalContent(pageText, basket);
+                callback(finalContent);
+            }
+        });
+    }
+
+    function showExportChoiceModal(pageText, basket, onConfirm) {
+        const modalMask = document.createElement('div');
+        Object.assign(modalMask.style, {
+            position: 'fixed', top: '0', left: '0', width: '100vw', height: '100vh',
+            backgroundColor: 'rgba(0,0,0,0.7)', zIndex: '2147483649', display: 'flex',
+            alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(2px)'
+        });
+
+        const card = document.createElement('div');
+        Object.assign(card.style, {
+            width: '320px', backgroundColor: '#1e1e1e', color: '#fff',
+            borderRadius: '12px', padding: '20px', boxShadow: '0 10px 40px rgba(0,0,0,0.6)',
+            display: 'flex', flexDirection: 'column', gap: '12px', border: '1px solid #444', textAlign: 'center'
+        });
+
+        const title = document.createElement('h3');
+        title.innerText = "Select Content to Export";
+        title.style.margin = '0 0 10px 0';
+
+        const createBtn = (text, val, color) => {
+            const btn = document.createElement('button');
+            btn.innerText = text;
+            Object.assign(btn.style, {
+                padding: '10px', border: 'none', borderRadius: '6px', cursor: 'pointer',
+                fontWeight: 'bold', backgroundColor: '#333', color: '#fff', border: '1px solid #555',
+                transition: 'all 0.2s'
+            });
+            btn.onmouseover = () => { btn.style.backgroundColor = color; btn.style.borderColor = color; };
+            btn.onmouseout = () => { btn.style.backgroundColor = '#333'; btn.style.borderColor = '#555'; };
+            btn.onclick = () => {
+                modalMask.remove();
+                onConfirm(val);
+            };
+            return btn;
+        };
+
+        const btnPage = createBtn(`Clipboard Only`, 'page', '#2196F3');
+        const btnBasket = createBtn(`Basket Only (Number:${basket.length})`, 'basket', '#FF9800');
+        const btnBoth = createBtn(`Merge Both (Append)`, 'both', '#4CAF50');
+
+        const btnCancel = document.createElement('button');
+        btnCancel.innerText = "Cancel";
+        Object.assign(btnCancel.style, {
+            marginTop: '8px', background: 'transparent', border: 'none', color: '#aaa', cursor: 'pointer', fontSize: '12px'
+        });
+        btnCancel.onclick = () => modalMask.remove();
+
+        card.append(title, btnBasket, btnPage, btnBoth, btnCancel);
+        modalMask.appendChild(card);
+        document.body.appendChild(modalMask);
+    }
+
     function handleDownload() {
-        const curLang = window.ccManager.lang;
-        const t = LANG_DATA[curLang];
-        const text = getSelectedText();
-        if (!text) { alert(t.alert_no_selection); return; }
-        const blob = new Blob([text], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'chat-context-' + new Date().toISOString().slice(0, 10) + '.txt';
-        a.click();
-        URL.revokeObjectURL(url);
+        resolveContentToExport((finalContent) => {
+            const blob = new Blob([finalContent], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'chat-context-' + new Date().toISOString().slice(0, 10) + '.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
     }
 
     function handleCopyOnly() {
-        const curLang = window.ccManager.lang;
-        const t = LANG_DATA[curLang];
-        const text = getSelectedText();
-        if (!text) { alert(t.alert_no_selection); return; }
-        navigator.clipboard.writeText(text).then(() => {
-            alert(t.alert_copy_done);
-        }).catch(err => alert(t.alert_fail));
+        const t = LANG_DATA[window.ccManager.lang];
+        
+        getBasket((basket) => {
+            const pageText = getSelectedText(false); 
+            if (!pageText && (!basket || basket.length === 0)) {
+                alert(t.alert_no_selection);
+                return;
+            }
+            const finalContent = constructFinalContent(pageText, basket);
+            navigator.clipboard.writeText(finalContent).then(() => {
+                showToast(t.alert_copy_done);
+            }).catch(err => alert("Copy failed"));
+        });
     }
 
-    /* =========================================
-       Basket & Cross-Transfer Logic
-    ========================================= */
     function getBasket(cb) {
         chrome.storage.local.get(['cc_basket'], (result) => {
             const basket = result.cc_basket || [];
@@ -1024,6 +1177,7 @@
                     renderBasketPreview(basket);
                 }
             }
+            calculateTotalTokens();
         });
     }
 
@@ -1203,7 +1357,7 @@
     }
 
     function handleAddToBasket() {
-        const text = getSelectedText();
+        const text = getSelectedText(false); 
         const t = LANG_DATA[window.ccManager.lang];
         if (!text) { alert(t.alert_no_selection); return; }
 
@@ -1231,54 +1385,29 @@
     function handlePasteBasket() {
         getBasket((basket) => {
             const t = LANG_DATA[window.ccManager.lang];
-            if (basket.length === 0) {
-                alert("Basket is empty!");
-                return;
-            }
-
-            const combinedText = basket.map((item, idx) =>
-                `[Part ${idx + 1} from ${item.source}]\n${item.text}`
-            ).join("\n\n");
-
+            if (basket.length === 0) { alert("Basket is empty!"); return; }
+            const finalContent = constructFinalContent(null, basket);
             const currentPlatform = PLATFORMS.find(p => window.location.hostname.includes(p.id));
             if (currentPlatform) {
-                const est = estimateTokens(combinedText);
+                const est = estimateTokens(finalContent);
                 if (est > currentPlatform.limit) {
-                    const msg = t.token_warn_msg
-                        .replace('{est}', est.toLocaleString())
-                        .replace('{platform}', currentPlatform.name)
-                        .replace('{limit}', currentPlatform.limit.toLocaleString());
+                    const msg = t.token_warn_msg.replace('{est}', est).replace('{platform}', currentPlatform.name).replace('{limit}', currentPlatform.limit);
                     if (!confirm(msg)) return;
                 }
             }
 
             const inputEl = document.querySelector(config.inputSelector);
             if (inputEl) {
-                autoFillInput(inputEl, combinedText);
+                autoFillInput(inputEl, finalContent);
                 showToast(t.toast_autofill);
-            } else {
-                alert("Cannot find input box.");
-            }
+            } else alert("Cannot find input box.");
         });
     }
 
     function handleCrossTransfer(platformObj) {
-        const curLang = window.ccManager.lang;
-        const t = LANG_DATA[curLang];
-
-        getBasket((basket) => {
-            let textToTransfer = null;
-            if (basket.length > 0) {
-                textToTransfer = basket.map((item, idx) =>
-                    `[Part ${idx + 1} from ${item.source}]\n${item.text}`
-                ).join("\n\n");
-            } else {
-                textToTransfer = getSelectedText();
-            }
-
-            if (!textToTransfer) { alert(t.alert_no_selection); return; }
-
-            const est = estimateTokens(textToTransfer);
+        resolveContentToExport((finalContent) => {
+            const t = LANG_DATA[window.ccManager.lang];
+            const est = estimateTokens(finalContent);
             const limit = platformObj.limit || 30000;
 
             if (est > limit) {
@@ -1291,13 +1420,11 @@
 
             chrome.storage.local.set({
                 'cc_transfer_payload': {
-                    text: textToTransfer,
+                    text: finalContent,
                     timestamp: Date.now(),
                     source: window.location.hostname
                 }
-            }, () => {
-                window.open(platformObj.url, '_blank');
-            });
+            }, () => window.open(platformObj.url, '_blank'));
         });
     }
 
@@ -1410,9 +1537,526 @@
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.action === "TOGGLE_INTERFACE") {
             toggleInterface();
+            sendResponse({ status: "done" });
         }
+        else if (request.action === "PING") {
+            sendResponse({ status: "pong" });
+        }
+        else if (request.action === "BASKET_UPDATED") {
+            updateBasketUI();
+            calculateTotalTokens();
+        }
+        return false;
     });
 
     checkAutoFill();
+
+    /* =========================================
+       7. Keyboard Shortcuts
+    ========================================= */
+    document.addEventListener('keydown', function(e) {
+        const tag = e.target?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) {
+            return;
+        }
+        if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+            const key = e.code;
+            // Alt+Z: activate area selection mode
+            if (key === 'KeyZ') {
+                e.preventDefault();
+                if (!window.ccManager.active) {
+                    openInterface();
+                }
+                toggleSelectionMode();
+                const p = document.getElementById('cc-panel');
+                if (p) p.style.opacity = '0.2';
+            }
+            // Alt+L: toggle language between zh and en
+            if (key === 'KeyL') {
+                e.preventDefault();
+                const oldLang = window.ccManager.lang;
+                const newLang = oldLang === 'zh' ? 'en' : 'zh';
+                const currentInput = prefixInput?.value?.trim() || '';
+                const oldDefault = LANG_DATA[oldLang].default_prompt.trim();
+                if (currentInput === oldDefault) {
+                    prefixInput.value = LANG_DATA[newLang].default_prompt;
+                    flashInput(prefixInput);
+                }
+                window.ccManager.lang = newLang;
+                updateUITexts();
+            }
+            // Alt+M: toggle the panel visibility
+            if (key === 'KeyM') {
+                e.preventDefault();
+                toggleInterface();
+            }
+        }
+    });
+
+    /* =========================================
+       8. Paintbrush / Area Selection Logic
+    ========================================= */
+    let paintSvg = null;
+    let paintPath = null;
+    let points = [];
+    let isDrawing = false;
+
+    function toggleSelectionMode() {
+        if (paintSvg) {
+            closeSelectionMode();
+            return;
+        }
+
+        paintSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        Object.assign(paintSvg.style, {
+            position: 'fixed', top: '0', left: '0', width: '100vw', height: '100vh',
+            zIndex: '2147483646', cursor: 'crosshair', pointerEvents: 'auto'
+        });
+
+        paintPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        paintPath.setAttribute("stroke", "#4CAF50");
+        paintPath.setAttribute("stroke-width", "3");
+        paintPath.setAttribute("fill", "none"); 
+        paintPath.setAttribute("stroke-linejoin", "round");
+        paintPath.setAttribute("stroke-linecap", "round");
+        
+        paintSvg.appendChild(paintPath);
+        document.body.appendChild(paintSvg);
+
+        paintSvg.addEventListener('mousedown', startDraw);
+        document.addEventListener('keydown', onEscKey);
+        
+        const t = LANG_DATA[window.ccManager.lang];
+        showToast(t.toast_enter_paint || "Draw to select text (ESC to exit)");
+    }
+
+    function closeSelectionMode() {
+        if (paintSvg) paintSvg.remove();
+        paintSvg = null;
+        paintPath = null;
+        resetDrawingState();
+        document.removeEventListener('keydown', onEscKey);
+
+        const p = document.getElementById('cc-panel');
+        if (p) p.style.opacity = '1';
+    }
+
+    function resetDrawingState() {
+        points = [];
+        isDrawing = false;
+        if (paintPath) paintPath.setAttribute('d', '');
+    }
+
+    function onEscKey(e) {
+        if (e.key === 'Escape') closeSelectionMode();
+    }
+
+    function startDraw(e) {
+        e.preventDefault();
+        resetDrawingState();
+        isDrawing = true;
+        points.push({ x: e.clientX, y: e.clientY });
+        updatePath();
+
+        paintSvg.addEventListener('mousemove', draw);
+        window.addEventListener('mouseup', endDraw);
+    }
+
+    function draw(e) {
+        if (!isDrawing) return;
+        const lastPoint = points[points.length - 1];
+        if (lastPoint) {
+            const dist = Math.hypot(e.clientX - lastPoint.x, e.clientY - lastPoint.y);
+            if (dist < 5) return; 
+        }
+        points.push({ x: e.clientX, y: e.clientY });
+        updatePath();
+    }
+
+    function updatePath() {
+        if (points.length < 2) return;
+        const d = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+        paintPath.setAttribute('d', d);
+    }
+
+    function endDraw(e) {
+        if (!isDrawing) return;
+        isDrawing = false;
+        paintSvg.removeEventListener('mousemove', draw);
+        window.removeEventListener('mouseup', endDraw);
+        if (points.length < 2) {
+            resetDrawingState();
+            return;
+        }
+
+        const d = paintPath.getAttribute('d') + " Z";
+        paintPath.setAttribute('d', d);
+        paintPath.setAttribute("fill", "rgba(76, 175, 80, 0.1)");
+
+        const capturedText = extractTextFromPolygon(points);
+        if (capturedText && capturedText.length > 0) {
+            showPreviewModal(capturedText);
+        } else {
+            const t = LANG_DATA[window.ccManager.lang];
+            showToast(t.paint_no_text);
+            setTimeout(closeSelectionMode, 500); 
+        }
+    }
+
+    function onSegment(p, q, r) {
+        return q.x <= Math.max(p.x, r.x) && q.x >= Math.min(p.x, r.x) &&
+               q.y <= Math.max(p.y, r.y) && q.y >= Math.min(p.y, r.y);
+    }
+
+    function orientation(p, q, r) {
+        const val = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
+        if (val === 0) return 0; 
+        return (val > 0) ? 1 : 2;
+    }
+
+    function doIntersect(p1, q1, p2, q2) {
+        const o1 = orientation(p1, q1, p2);
+        const o2 = orientation(p1, q1, q2);
+        const o3 = orientation(p2, q2, p1);
+        const o4 = orientation(p2, q2, q1);
+
+        if (o1 !== o2 && o3 !== o4) return true;
+        if (o1 === 0 && onSegment(p1, p2, q1)) return true;
+        if (o2 === 0 && onSegment(p1, q2, q1)) return true;
+        if (o3 === 0 && onSegment(p2, p1, q2)) return true;
+        if (o4 === 0 && onSegment(p2, q1, q2)) return true;
+
+        return false;
+    }
+
+    function isSelfIntersecting(polyPoints) {
+        if (polyPoints.length < 4) return false;
+        
+        for (let i = 0; i < polyPoints.length - 1; i++) {
+            const p1 = polyPoints[i];
+            const q1 = polyPoints[i+1];
+            for (let j = i + 2; j < polyPoints.length - 1; j++) {
+                const p2 = polyPoints[j];
+                const q2 = polyPoints[j+1];
+                
+                if (doIntersect(p1, q1, p2, q2)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    function isPointInPolygon(point, vs) {
+        let x = point.x, y = point.y;
+        let inside = false;
+        for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+            let xi = vs[i].x, yi = vs[i].y;
+            let xj = vs[j].x, yj = vs[j].y;
+            
+            let intersect = ((yi > y) != (yj > y)) &&
+                (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+            if (intersect) inside = !inside;
+        }
+        return inside;
+    }
+
+    function extractTextFromPolygon(polygonPoints) {
+        const minX = Math.min(...polygonPoints.map(p => p.x));
+        const maxX = Math.max(...polygonPoints.map(p => p.x));
+        const minY = Math.min(...polygonPoints.map(p => p.y));
+        const maxY = Math.max(...polygonPoints.map(p => p.y));
+
+        const walker = document.createTreeWalker(
+            document.body,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: (node) => {
+                    if (!node.textContent.trim()) return NodeFilter.FILTER_REJECT;
+                    const parent = node.parentElement;
+                    if (!parent || parent.closest('#cc-panel') || parent.closest('svg')) {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    if (parent.offsetParent === null) return NodeFilter.FILTER_REJECT;
+
+                    const range = document.createRange();
+                    range.selectNode(node);
+                    const rect = range.getBoundingClientRect();
+
+                    if (rect.right < minX || rect.left > maxX || rect.bottom < minY || rect.top > maxY) {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+
+                    const centerY = rect.top + rect.height / 2;
+                    
+                    const step = 30; 
+                    
+                    if (rect.width < step) {
+                        const centerX = rect.left + rect.width / 2;
+                        if (isPointInPolygon({x: centerX, y: centerY}, polygonPoints)) {
+                            return NodeFilter.FILTER_ACCEPT;
+                        }
+                    } else {
+                        for (let x = rect.left + 5; x < rect.right; x += step) {
+                            if (isPointInPolygon({x: x, y: centerY}, polygonPoints)) {
+                                return NodeFilter.FILTER_ACCEPT;
+                            }
+                        }
+                        if (isPointInPolygon({x: rect.right - 5, y: centerY}, polygonPoints)) {
+                            return NodeFilter.FILTER_ACCEPT;
+                        }
+                    }
+                    
+                    return NodeFilter.FILTER_REJECT;
+                }
+            }
+        );
+
+        let resultText = "";
+        let lastParent = null;
+
+        while (walker.nextNode()) {
+            const node = walker.currentNode;
+            const parent = node.parentElement;
+            let text = node.textContent;
+
+            const isBlock = isBlockElement(parent);
+
+            if (isBlock && parent !== lastParent && resultText.length > 0) {
+                resultText += "\n";
+                if (parent.tagName === 'P') resultText += "\n";
+            } else if (!isBlock && parent !== lastParent && resultText.length > 0) {
+                if (!resultText.endsWith(' ') && !resultText.endsWith('\n') && !text.startsWith(' ')) {
+                    resultText += " ";
+                }
+            }
+
+            text = text.replace(/\s+/g, ' ');
+            resultText += text;
+            lastParent = parent;
+        }
+
+        return resultText.trim();
+    }
+
+    function onMouseDown(e) {
+        e.preventDefault();
+        startX = e.clientX;
+        startY = e.clientY;
+
+        Object.assign(selectionBox.style, {
+            left: startX + 'px', top: startY + 'px', width: '0', height: '0', display: 'block'
+        });
+
+        selectionOverlay.addEventListener('mousemove', onMouseMove);
+        selectionOverlay.addEventListener('mouseup', onMouseUp);
+    }
+
+    function onMouseMove(e) {
+        const currentX = e.clientX;
+        const currentY = e.clientY;
+        const width = Math.abs(currentX - startX);
+        const height = Math.abs(currentY - startY);
+        const left = Math.min(currentX, startX);
+        const top = Math.min(currentY, startY);
+
+        Object.assign(selectionBox.style, {
+            width: width + 'px', height: height + 'px',
+            left: left + 'px', top: top + 'px'
+        });
+    }
+
+    function onMouseUp(e) {
+        selectionOverlay.removeEventListener('mousemove', onMouseMove);
+        selectionOverlay.removeEventListener('mouseup', onMouseUp);
+
+        const rect = selectionBox.getBoundingClientRect();
+        selectionBox.style.display = 'none';
+        const capturedText = extractTextFromRect(rect);
+        if (capturedText && capturedText.length > 0) {
+            showPreviewModal(capturedText);
+        } else {
+            const t = LANG_DATA[window.ccManager.lang];
+            showToast(t.paint_no_text);
+            closeSelectionMode();
+        }
+    }
+
+    function extractTextFromRect(selectionRect) {
+        const walker = document.createTreeWalker(
+            document.body,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: (node) => {
+                    if (!node.textContent.trim()) return NodeFilter.FILTER_REJECT;
+
+                    const parent = node.parentElement;
+                    if (!parent || parent.closest('#cc-panel') || parent.closest('#cc-selection-overlay') || parent.closest('#cc-tooltip')) {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+
+                    if (parent.offsetParent === null) return NodeFilter.FILTER_REJECT;
+
+                    const range = document.createRange();
+                    range.selectNode(node);
+                    const rect = range.getBoundingClientRect();
+
+                    return (rect.bottom > selectionRect.top &&
+                        rect.top < selectionRect.bottom &&
+                        rect.right > selectionRect.left &&
+                        rect.left < selectionRect.right)
+                        ? NodeFilter.FILTER_ACCEPT
+                        : NodeFilter.FILTER_REJECT;
+                }
+            }
+        );
+
+        let resultText = "";
+        let lastParent = null;
+
+        while (walker.nextNode()) {
+            const node = walker.currentNode;
+            const parent = node.parentElement;
+            let text = node.textContent;
+
+            const isBlock = isBlockElement(parent);
+            if (isBlock && parent !== lastParent && resultText.length > 0) {
+                resultText += "\n";
+                if (parent.tagName === 'P') resultText += "\n";
+            } else if (!isBlock && parent !== lastParent && resultText.length > 0) {
+                if (!resultText.endsWith(' ') && !resultText.endsWith('\n') && !text.startsWith(' ')) {
+                    resultText += " ";
+                }
+            }
+            text = text.replace(/\s+/g, ' ');
+
+            resultText += text;
+            lastParent = parent;
+        }
+
+        return resultText.trim();
+    }
+
+    function isBlockElement(el) {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        if (['P', 'DIV', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'PRE', 'BLOCKQUOTE', 'ARTICLE', 'SECTION'].includes(el.tagName)) {
+            return true;
+        }
+        if (style.display === 'block' || style.display === 'flex' || style.display === 'grid') {
+            return true;
+        }
+        return false;
+    }
+
+    function showPreviewModal(text) {
+        const t = LANG_DATA[window.ccManager.lang];
+        const modalMask = document.createElement('div');
+        Object.assign(modalMask.style, {
+            position: 'fixed', top: '0', left: '0', width: '100vw', height: '100vh',
+            backgroundColor: 'rgba(0,0,0,0.6)', zIndex: '2147483648',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backdropFilter: 'blur(2px)'
+        });
+
+        const card = document.createElement('div');
+        Object.assign(card.style, {
+            width: '600px', maxWidth: '90%',
+            backgroundColor: '#1e1e1e',
+            color: '#e2e8f0',
+            borderRadius: '12px', padding: '20px',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
+            display: 'flex', flexDirection: 'column', gap: '12px',
+            border: '1px solid #333'
+        });
+
+        const header = document.createElement('div');
+        header.style.display = 'flex';
+        header.style.justifyContent = 'space-between';
+        header.style.alignItems = 'center';
+
+        const title = document.createElement('div');
+        title.innerHTML = t.preview_title;
+        title.style.fontSize = '16px';
+
+        const stats = document.createElement('div');
+        stats.style.fontSize = '12px';
+        stats.style.color = '#aaa';
+
+        header.append(title, stats);
+
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        Object.assign(textarea.style, {
+            width: '100%', height: '300px', padding: '12px',
+            border: '1px solid #444', borderRadius: '8px',
+            fontSize: '13px', lineHeight: '1.6', fontFamily: 'monospace',
+            backgroundColor: '#2d2d2d', color: '#fff',
+            resize: 'vertical', outline: 'none'
+        });
+
+        const updateStats = () => {
+            const len = textarea.value.length;
+            const estTokens = Math.ceil(len / 3.5);
+            stats.innerHTML = `${t.preview_words}: ${len} &nbsp;|&nbsp; ${t.token_est} <span style="color:${estTokens > 1000 ? '#ff9800' : '#4CAF50'}">${estTokens}</span>`;
+        };
+
+        textarea.addEventListener('input', updateStats);
+        updateStats();
+
+        const btnRow = document.createElement('div');
+        btnRow.style.display = 'flex';
+        btnRow.style.justifyContent = 'flex-end';
+        btnRow.style.gap = '10px';
+        btnRow.style.marginTop = '8px';
+
+        const btnCancel = document.createElement('button');
+        btnCancel.innerText = t.preview_cancel;
+        Object.assign(btnCancel.style, {
+            padding: '8px 16px', border: '1px solid #555', borderRadius: '6px',
+            cursor: 'pointer', background: 'transparent', color: '#ccc'
+        });
+        btnCancel.onmouseover = () => btnCancel.style.borderColor = '#888';
+        btnCancel.onmouseout = () => btnCancel.style.borderColor = '#555';
+        btnCancel.onclick = () => {
+            modalMask.remove();
+            closeSelectionMode();
+        };
+
+        const btnConfirm = document.createElement('button');
+        btnConfirm.innerText = t.preview_confirm;
+        Object.assign(btnConfirm.style, {
+            padding: '8px 20px', border: 'none', background: '#4CAF50', color: '#fff',
+            borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold'
+        });
+        btnConfirm.onmouseover = () => btnConfirm.style.filter = 'brightness(1.1)';
+        btnConfirm.onmouseout = () => btnConfirm.style.filter = 'brightness(1)';
+
+        btnConfirm.onclick = () => {
+            const finalText = textarea.value.trim();
+            if (finalText) {
+                getBasket((basket) => {
+                    basket.push({
+                        text: finalText,
+                        timestamp: Date.now(),
+                        source: window.location.hostname + t.source_area_select
+                    });
+                    chrome.storage.local.set({ 'cc_basket': basket }, () => {
+                        showToast(t.toast_basket_add);
+                        updateBasketUI();
+                        calculateTotalTokens();
+                    });
+                });
+            }
+            modalMask.remove();
+            closeSelectionMode();
+        };
+
+        btnRow.append(btnCancel, btnConfirm);
+        card.append(header, textarea, btnRow);
+        modalMask.append(card);
+        document.body.appendChild(modalMask);
+        textarea.focus();
+    }
 
 })();

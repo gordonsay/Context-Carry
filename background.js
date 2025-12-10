@@ -1,3 +1,7 @@
+/* =========================================
+   Background Service Worker - ActiveTab Mode
+========================================= */
+
 chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.local.remove(['cc_basket', 'cc_transfer_payload'], () => {
         console.log("Context-Carry: Storage cleared on install/update.");
@@ -10,8 +14,44 @@ chrome.runtime.onInstalled.addListener(() => {
     });
 });
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+chrome.runtime.onStartup.addListener(() => {
+    chrome.storage.local.remove(['cc_basket', 'cc_transfer_payload'], () => {
+        console.log("Context-Carry: Privacy cleanup done. Storage cleared on startup.");
+    });
+});
+
+async function ensureContentScript(tabId) {
+    try {
+        await chrome.tabs.sendMessage(tabId, { action: "PING" });
+    } catch (err) {
+        console.log("Injecting content script for tab:", tabId);
+        await chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            files: ["content.js"]
+        });
+    }
+}
+
+chrome.action.onClicked.addListener(async (tab) => {
+    const url = tab.url || "";
+    if (url.startsWith("chrome://") || url.startsWith("edge://") || url.startsWith("about:") || url.startsWith("chromewebstore")) {
+        return;
+    }
+
+    try {
+        await ensureContentScript(tab.id);
+        chrome.tabs.sendMessage(tab.id, { action: "TOGGLE_INTERFACE" });
+    } catch (e) {
+        console.error("Failed to inject or toggle:", e);
+    }
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId === "cc-add-to-basket" && info.selectionText) {
+        if (tab && tab.id && !tab.url.startsWith("chrome://")) {
+            try { await ensureContentScript(tab.id); } catch(e) {}
+        }
+
         addToBasketFromBackground(info.selectionText, tab);
     }
 });
@@ -30,7 +70,6 @@ function addToBasketFromBackground(text, tab) {
 
         chrome.storage.local.set({ 'cc_basket': basket }, () => {
             console.log("Context-Carry: Item added via Context Menu.");
-
             chrome.action.setBadgeText({ text: basket.length.toString() });
             chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' });
 
@@ -42,37 +81,22 @@ function addToBasketFromBackground(text, tab) {
     });
 }
 
-chrome.action.onClicked.addListener(async (tab) => {
-    const url = tab.url || "";
-    const isSupported = url.includes("chatgpt.com") ||
-        url.includes("gemini.google.com") ||
-        url.includes("claude.ai") ||
-        url.includes("grok.com") ||
-        url.includes("x.com");
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status === 'complete' && tab.url) {
+        const targetDomains = ["chatgpt.com", "claude.ai", "gemini.google.com", "grok.com", "x.com"];
+        const isTarget = targetDomains.some(domain => tab.url.includes(domain));
 
-    if (isSupported) {
-        try {
-            await chrome.tabs.sendMessage(tab.id, { action: "TOGGLE_INTERFACE" });
-            console.log("Toggle signal sent.");
-        } catch (err) {
-            console.log("First time click, injecting content script...");
-            await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                files: ["content.js"]
+        if (isTarget) {
+            chrome.storage.local.get(['cc_transfer_payload'], (result) => {
+                if (result.cc_transfer_payload) {
+                    const isFresh = (Date.now() - result.cc_transfer_payload.timestamp < 30000);
+                    
+                    if (isFresh) {
+                        console.log(`Context-Carry: Detected target LLM (${tab.url}) with pending payload. Injecting...`);
+                        ensureContentScript(tabId);
+                    }
+                }
             });
         }
-
-    } else {
-        chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: () => alert("Context Carry supports：\n ChatGPT\n Gemini\n Claude\n Grok (X)")
-        });
     }
-});
-
-
-chrome.runtime.onStartup.addListener(() => {
-    chrome.storage.local.remove(['cc_basket', 'cc_transfer_payload'], () => {
-        console.log("Context-Carry: Privacy cleanup done. Storage cleared on startup.");
-    });
 });

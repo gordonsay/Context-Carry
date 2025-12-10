@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 ------------------------------------------------------------------------
 
+## [1.4.2] - 2025-12-11
+
+### Added
+- **Visual Area Selection (Area Select / Brush Mode):**
+  - Introduced a brush-based freeform selection mode that allows users to visually select any region on the page.
+  - Automatically extracts all readable text within the selected area.
+  - Supports all websites, not limited to LLM or AI-related pages.
+  - Includes a real-time preview window before adding content to the Basket.
+
+- **Keyboard Shortcuts:**
+  - `Alt + M` — Toggle main Context-Carry panel.
+  - `Alt + Z` — Activate Area Selection (Brush Mode).
+  - `Alt + L` — Toggle UI language (EN / ZH).
+  - All shortcuts use two-key combinations to avoid conflicts with common system shortcuts.
+
+- **Cross-Tab Token Synchronization (Est Token Sync):**
+  - Estimated token count is now synchronized across all open tabs.
+  - When content is added in one tab, all other tabs instantly reflect the updated token count.
+
+- **Smart Export Scheduling (Multi-Source Output Choice):**
+  - When both Page Selection and Basket content exist:
+    - Users are prompted to choose how to export:
+      - Export Page content only
+      - Export Basket content only
+      - Merge and export both (Append mode)
+
+- **Clean System Prompt Architecture:**
+  - System Prompt (Prefix) is now fully separated from user content.
+  - Basket content no longer includes duplicated system prompts.
+  - Prevents prompt pollution when merging content from multiple sources.
+
+### Changed
+- Refactored export structure into the following unified format:
+  - `System Prefix`
+  - `Page Selection`
+  - `Basket Content`
+  - `[END OF CONTEXT]`
+- Improved long-context stability and output readability.
+
+------------------------------------------------------------------------
+
 ## [1.4] - 2025-12-10
 
 ### Added

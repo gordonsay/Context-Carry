@@ -3,7 +3,7 @@
 > [🔙 返回英文版本（English Version）](README.md)
 
 [![Language](https://img.shields.io/badge/Language-English-blue)](README.md)
-![Version](https://img.shields.io/badge/version-1.4.1-blue)
+![Version](https://img.shields.io/badge/version-1.4.2-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 <details>
@@ -64,32 +64,37 @@ Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功�
 
 ## 核心功能（Key Features）
 
-- **全網站通用擷取（New!）**  
-  不只支援 AI 聊天，在任何網站選取文字，右鍵即可加入 Context Basket。
+- **畫筆圈選擷取（Area Select / 圈選區域）🖌️【New!】**
+  啟動圈選模式後，可自由在任何網站畫出區域，系統會自動擷取該區域內的所有文字，並顯示即時預覽確認視窗。
 
-- **跨視窗 Context Basket**  
-  你可以同時從多個分頁（AI、文件、論壇）收集片段，最後一次整理後轉移。
+- **跨網站通用擷取**
+  不只支援 AI 聊天頁，在任何網站中選取文字，右鍵即可加入 Context Basket。
 
-- **拖曳排序（New!）**  
+- **跨視窗 Context Basket**
+  你可以同時從多個分頁（AI、文件、論壇、技術文章）收集片段，最後一次整理後轉移。
+
+- **拖曳排序**
   可在 Basket 中自由拖曳調整順序，重組 AI 理解的敘事流程。
 
-- **Token 智慧估算（New!）**  
-  即時顯示預估 Token 數量，並依目標平台給出超限警告。
+- **Token 智慧估算（Cross-Tab 同步）**
+  Token 預估數量會在不同分頁即時同步更新，避免超出上下文長度限制。
 
-- **Magic Auto-Fill 自動填入**  
+- **System Prompt 乾淨分離（Clean Context）**
+  System Prompt（前綴提示詞）與實際內容正式分離管理，加入 Basket 的內容不再混入重複的 system prompt，避免多來源合併時污染上下文。
+
+- **智慧輸出排程（Smart Export Choice）**
+  當 Basket 與頁面選取內容同時存在時，匯出時可選擇：
+  - 僅輸出頁面
+  - 僅輸出 Basket
+  - 合併輸出（Append）
+
+- **Magic Auto-Fill 自動填入**
   自動開啟目標 AI 網站並填入整理好的內容，完全免貼上。
 
-- **Markdown 格式轉換**  
+- **Markdown 格式轉換**
   自動將 HTML 轉為乾淨 Markdown（標題、粗體、程式碼區塊）。
 
-- **跨平台無縫轉移（Cross-LLM）**  
-  支援：
-  - ChatGPT 🤖
-  - Claude.ai 🧠
-  - Google Gemini 💎
-  - Grok ✖️
-
-- **可拖曳懸浮介面**  
+- **可拖曳懸浮介面**
   面板位置可自由拖移，不會遮擋畫面。
 
 ---
@@ -101,6 +106,16 @@ Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功�
 ![標準 UI](screenshots/screenshot_gpt.png)
 
 ![進階 UI](screenshots/screenshot_gpt_advanced.png)
+
+---
+
+## 快捷鍵（Keyboard Shortcuts）
+
+| 快捷鍵 | 功能 | 說明 |
+|--------|------|------|
+| **Alt + M** | 開關面板 | 快速顯示 / 隱藏 Context-Carry |
+| **Alt + Z** | 啟動圈選 | 進入畫筆圈選模式 |
+| **Alt + L** | 切換語言 | 中 / 英介面切換 |
 
 ---
 
@@ -131,7 +146,17 @@ Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功�
 
 ---
 
-### 方法二：從任何網站擷取文字
+### 方法二：畫筆圈選模式（Area Select）
+
+1. 點擊 Context-Carry 面板上的 **🖌️ 畫筆圖示**  
+   或按下快捷鍵 **Alt + Z**
+2. 在畫面上自由畫出要擷取的區域
+3. 系統會顯示即時文字預覽視窗
+4. 點擊「加入採集籃（Add to Basket）」即可儲存
+
+---
+
+### 方法三：從任何網站擷取文字
 
 1. 在任意網站選取文字（文件、技術文章、新聞等）
 2. **滑鼠右鍵**
@@ -140,7 +165,7 @@ Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功�
 
 ---
 
-### 方法三：整理與轉移上下文
+### 方法四：整理與轉移上下文
 
 1. 點擊 Context-Carry 面板
 2. 點擊 Basket 箭頭 **▼** → 可拖曳重新排序
