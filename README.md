@@ -1,20 +1,34 @@
-# Context-Carry: Cross-LLM Chat History Export & Context Manager
+# Context-Carry — Move Your Chat Context Between ChatGPT, Claude & Gemini in One Click
 
 [![中文說明](https://img.shields.io/badge/Language-繁體中文-blue)](README_zh-TW.md)
 ![Version](https://img.shields.io/badge/version-1.4.1-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-**Build the perfect context from anywhere, then bring it to any AI.**
+**Stop rewriting the same prompt. Carry your full context across AI platforms instantly.**
 
-**Context-Carry** is a powerful Chrome extension designed for **Chat History Export**, **Prompt Management**, and **Seamless Cross-LLM Transfer**.
+Context-Carry is a lightweight Chrome extension that lets you:
 
-It allows you to effortlessly aggregate conversation threads from different AI platforms or extract content from any webpage, reorder them into a coherent narrative, and Auto-Fill them into **ChatGPT**, **Claude**, **Gemini**, or **Grok**.
+- ✅ Extract chat history from ChatGPT, Claude, Gemini, and Grok  
+- ✅ Capture important text from any website (docs, blogs, StackOverflow)  
+- ✅ Reorder everything into a clean, structured context  
+- ✅ Auto-fill it into a new AI chat with one click  
+- ✅ Avoid context limit errors with real-time token estimation  
 
-Stop manually copying and pasting massive walls of text. Select specific messages, attach your custom system prompt, click a target platform, and watch it **automatically fill** the context in the new chat.
+This tool is built for developers, researchers, and power users who constantly switch between AI platforms and hate rebuilding the same context again and again.
+
+> If you use multiple AI tools daily, this extension saves you hours every week.
 
 > **[點此查看中文說明 (Traditional Chinese Version)](README_zh-TW.md)**
 
-## Features
+## Typical Use Cases
+
+- 🔁 Move a long ChatGPT discussion directly into Claude for deeper reasoning  
+- 🧪 Carry debugging conversations between multiple LLMs  
+- 📚 Collect documentation + StackOverflow answers + chat history into one clean prompt  
+- 🧠 Reuse well-structured prompts without copy-pasting  
+- 📏 Avoid context limit crashes with token-aware transfers  
+
+## Key Features (What Makes Context-Carry Different)
 
 - **Universal Web Capture (New!)**: Not just for AI chats! Right-click on any text on any website to add it to your Context Basket instantly.
 - **Cross-Window Context Basket**: The ultimate staging area. Collect snippets from ChatGPT in one tab, a documentation page in another, and a StackOverflow answer in a third.
@@ -105,3 +119,7 @@ For questions or support, please open an issue on the [GitHub repository](https:
 ## Note
 
 Due to browser security restrictions, file attachments (PDF/Images) cannot be transferred automatically.
+
+## Keywords
+
+ChatGPT Chrome Extension, Claude Context Tool, Gemini Prompt Transfer, LLM Context Manager, Prompt Engineering Tool, AI Workflow Assistant, Cross-LLM Chat Transfer
