@@ -3,15 +3,15 @@
 <details>
   <summary>Table of Contents</summary>
 
-- Quick Start  
-- Typical Use Cases  
-- Key Features  
-- Screenshots  
-- Installation  
-- Privacy  
-- Development  
-- License  
-- Contact  
+- [Quick Start](#quick-start)
+- [Typical Use Cases](#typical-use-cases)
+- [Key Features](#key-features-what-makes-context-carry-different)
+- [Screenshots](#screenshots)
+- [Installation](#installation)
+- [How to Use](#how-to-use)
+- [Privacy](#privacy)
+- [Development](#development)
+- [License](#license)
 
 </details>
 
