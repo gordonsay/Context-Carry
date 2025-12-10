@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ------------------------------------------------------------------------
 
+## [1.4] - 2025-12-10
+
+### Added
+- **Context Menu Integration:** Added **Add to Context Basket (+)** to the browser's right-click menu. Users can now capture text segments directly from any webpage without opening the main panel.
+- **Token Intelligence:**
+  - **Real-time Estimation:** Added a **Est. Tokens** display in the panel to track the combined size of selected messages and basket items.
+  - **Smart Warnings:** Implemented platform-specific safeguards (for ChatGPT, Gemini, Claude, Grok) to warn users when the transferred context exceeds recommended limits.
+- **Markdown Engine:**
+  - **Rich Text Support:** The extraction logic now preserves bold, italics, headers, and links by converting HTML to Markdown.
+  - **Code Block Optimization:** Automatically detects code snippets and converts them into Markdown fenced code blocks with language identifiers.
+- **Visual Enhancements:**
+  - **Animations:** Added smooth slide-in/out transitions for the panel and swipe effects when deleting items.
+  - **Glassmorphism:** Updated the UI with a **backdrop-filter blur** effect for a modern aesthetic.
+  - **Live Badge:** The extension icon now displays a real-time count of items currently in the basket.
+
+### Changed
+- **Data Extraction:** Refactored the core capture mechanism to output structured Markdown instead of raw text for better LLM readability.
+- **Privacy:** Extended the auto-cleanup logic to clear temporary storage on extension installation and updates, ensuring a clean slate across versions.
+- **Typography:** Updated the font stack to prioritize system UI fonts for better OS integration.
+
+------------------------------------------------------------------------
+
 ## [1.3] - 2025-12-10
 
 ### Added

@@ -1,31 +1,68 @@
-# Context Carry：AI 對話紀錄匯出與跨平台轉移工具 (Cross-LLM)
+# Context Carry：跨 LLM 對話匯出與上下文管理工具 (Cross-LLM Context Manager)
 
 > [🔙 Return to English Version](README.md)
 
-**Context Carry** 是一款 Chrome 擴充功能，解決 AI 使用者最大的痛點：**切換模型時遺失對話脈絡**。
+[![Language](https://img.shields.io/badge/Language-English-blue)](README.md)
+![Version](https://img.shields.io/badge/version-1.4-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-這款工具具備 **AI 對話匯出 (Chat History Export)** 與 **自動填入 (Auto-Fill)** 功能，讓你在不同 AI 平台之間無縫轉移上下文（支援 ChatGPT、Claude、Gemini、Grok）。
+**從任何地方建立完美上下文，再帶到任何 AI。**
 
-不再需要手動複製貼上！只要勾選你要保留的訊息，點擊目標平台圖示，Context Carry 就會自動開啟新分頁並將內容**自動填入**對話框。
+**Context Carry** 是一款強大的 Chrome 擴充功能，專為：
+- **AI 對話匯出**
+- **提示詞管理（Prompt Management）**
+- **跨 LLM 無縫上下文轉移**
+
+你可以從不同 AI 平台（ChatGPT、Claude、Gemini、Grok）收集對話，  
+或從**任何網站**擷取文字內容，重新排序成有邏輯的敘事流程，  
+再一鍵自動填入到目標 AI 平台。
+
+從此告別大量 `Ctrl + C / Ctrl + V`，  
+只要選取 → 加入 → 點擊平台 → **自動填入完成！**
 
 ---
 
-## 截圖
+## 功能特色（Features）
+
+- **全網站通用擷取（New!）**  
+  不只支援 AI 聊天！在任何網站（文件、新聞、技術文章、論壇）選取文字，**右鍵即可加入採集籃**。
+
+- **跨視窗採集籃（Context Basket）**  
+  你可以：
+  - 在 ChatGPT 分頁收集一段
+  - 在文件分頁收集一段
+  - 在 StackOverflow 收集一段  
+  最後統一整理後一次轉移。
+
+- **拖曳排序（New!）**  
+  上下文順序影響 AI 理解！  
+  可在採集籃中 **拖曳調整順序**，自由重組敘事流程。
+
+- **Token 智慧估算（New!）**  
+  即時顯示預估 Token 數量，並給出超限警告。  
+  （如 Gemini 1M vs ChatGPT 32k 上限）
+
+- **智慧自動填入（Magic Auto-Fill）**  
+  自動開啟目標 AI 平台並填入內容，完全免貼上。
+
+- **Markdown 轉換**  
+  自動將 HTML 內容轉成乾淨 Markdown 格式（標題、粗體、程式碼區塊）。
+
+- **跨平台無縫轉移（Cross-LLM）**  
+  支援：
+  - ChatGPT 🤖
+  - Claude.ai 🧠
+  - Google Gemini 💎
+  - Grok ✖️
+
+- **可拖曳懸浮面板（Draggable Panel）**  
+  面板可自由移動，不會遮擋你的畫面。
+
+---
+
+## 操作截圖
 
 ![Selection UI](screenshots/screenshot_gpt.png)
-
-## 功能特色
-
-- **跨平台無縫轉移 (Cross-LLM)**：支援雙向轉移 ChatGPT 🤖、Claude.ai 🧠、Google Gemini 💎 與 Grok ✖️。
-- **跨視窗採集籃 (New!)**：像購物車一樣，從多個不同的視窗或分頁「加入」對話片段，最後再一次性轉移或填入。
-- **懸浮面板可拖曳 (New!)**：按住面板標題列即可拖曳移動，不再擋住你的視線。
-- **Shift 快捷區段選取 (New!)**：按住 **Shift 鍵** 點擊，即可瞬間選取大量的連續訊息。
-- **智慧自動填入 (Auto-Fill)**：告別 `Ctrl+V`。點擊轉移後，內容會自動出現在目標 AI 的輸入框中。
-- **提示詞管理 (Prompt Management)**：可加入你自己的「System Prompt」或指令（例如：「請摘要以下內容...」）。
-- **對話備份**：
-  - **複製到剪貼簿**：手動貼到 Notion 或筆記軟體。
-  - **下載為 .txt**：將珍貴的對話紀錄存成檔案。
-- **隱私優先**：所有操作 100% 在本機瀏覽器內完成，採集籃資料會在瀏覽器重啟時自動清除。
 
 ---
 
@@ -46,18 +83,36 @@
 
 ## 使用方式
 
-1. 在任一支援的 AI 平台開啟對話（例如 ChatGPT）。
-2. 點擊瀏覽器工具列上的 **Context Carry** 圖示。
-3. **選取訊息**：
-   - 點擊 **➕** 選取單則訊息。
-   - **按住 Shift + 點擊** 可選取連續範圍的訊息。
-4. **轉移或採集**：
-   - **直接轉移**：點擊下方的目標平台圖示（例如 **Gemini 💎**）開啟新分頁並轉移。
-   - **跨視窗採集籃 (Context Basket)**：
-     1. 點擊 **「加入 (+)」** 將選取內容放入籃子。
-     2. 切換到其他視窗繼續收集。
-     3. 在目標視窗點擊 **「填入此視窗 (Paste Here)」** 即可一次匯總所有內容。
-5. **管理採集籃**：點擊籃子區塊的箭頭 (▼) 可展開預覽，支援 **拖曳排序** 與個別刪除，滑鼠懸停可查看完整內容。
+---
+
+### 方法一：擷取 AI 對話
+
+1. 開啟任一支援平台（ChatGPT / Claude / Gemini / Grok）
+2. 點擊 **Context Carry 懸浮面板**
+3. 點擊 **➕** 選取單則訊息  
+或使用 **Shift + 點擊** 進行區段選取
+4. 點擊 **Add (+)** 加入採集籃
+
+---
+
+### 方法二：從任何網站擷取文字（New）
+
+1. 在任意網站選取文字（文件、技術文章、新聞等）
+2. **滑鼠右鍵**
+3. 點擊 **「Add to Context Basket (+)」**
+4. 擴充功能圖示會顯示目前項目數量
+
+---
+
+### 方法三：整理與轉移上下文
+
+1. 點擊 Context Carry 面板
+2. 點擊採集籃箭頭 **▼**  
+→ 可 **拖曳重新排序**
+3. 查看 **Est. Tokens（預估 Token）**
+4. 選擇轉移方式：
+- ✅ **New Chat**：開新分頁並自動填入
+- ✅ **Existing Chat**：在目前視窗點擊 **Paste Here**
 
 ---
 

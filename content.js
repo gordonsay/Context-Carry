@@ -22,10 +22,10 @@
        1. Language dictionary and settings
     ========================================= */
     const PLATFORMS = [
-        { id: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com/?model=gpt-4o', icon: '🤖' },
-        { id: 'claude', name: 'Claude', url: 'https://claude.ai/new', icon: '🧠' },
-        { id: 'gemini', name: 'Gemini', url: 'https://gemini.google.com/app', icon: '💎' },
-        { id: 'grok', name: 'Grok', url: 'https://grok.com', icon: '✖️' }
+        { id: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com/?model=gpt-4o', icon: '🤖', limit: 30000 },
+        { id: 'claude', name: 'Claude', url: 'https://claude.ai/new', icon: '🧠', limit: 180000 },
+        { id: 'gemini', name: 'Gemini', url: 'https://gemini.google.com/app', icon: '💎', limit: 1000000 },
+        { id: 'grok', name: 'Grok', url: 'https://grok.com', icon: '✖️', limit: 100000 }
     ];
 
     const APP_CONFIG = {
@@ -82,7 +82,10 @@
             toast_basket_add: '已加入採集籃 🧺',
             toast_basket_clear: '採集籃已清空 🗑️',
             preview_del_tooltip: '刪除此筆資料',
-            preview_drag_hint: '可拖曳排序 ⇅ (懸停可看詳情)'
+            preview_drag_hint: '可拖曳排序 ⇅ (懸停可看詳情)',
+            token_est: '📊 預估 Token:',
+            token_warn_title: '⚠️ Token 數量警告',
+            token_warn_msg: '預估內容 ({est}) 超過了 {platform} 的建議限制 ({limit})。\n\n強行轉移可能會導致記憶遺失。\n是否仍要繼續？'
         },
         'en': {
             title: 'Context-Carry',
@@ -114,9 +117,66 @@
             toast_basket_add: 'Added to Basket 🧺',
             toast_basket_clear: 'Basket Cleared 🗑️',
             preview_del_tooltip: 'Remove item',
-            preview_drag_hint: 'Drag to reorder ⇅ (Hover for details)'
+            preview_drag_hint: 'Drag to reorder ⇅ (Hover for details)',
+            token_est: '📊 Est. Tokens:',
+            token_warn_title: '⚠️ Token Limit Warning',
+            token_warn_msg: 'Content ({est}) exceeds recommended limit for {platform} ({limit}).\n\nTransferring may cause memory loss.\nDo you want to proceed?'
         }
     };
+
+    function injectStyles() {
+        if (document.getElementById('cc-styles')) return;
+        const style = document.createElement('style');
+        style.id = 'cc-styles';
+        style.textContent = `
+            #cc-panel {
+                transform: translateX(30px);
+                opacity: 0;
+                transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.3s ease;
+                backdrop-filter: blur(12px);
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
+                border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            }
+            #cc-panel.cc-visible {
+                transform: translateX(0);
+                opacity: 1;
+            }
+
+            #cc-panel button {
+                transition: all 0.1s ease;
+                font-weight: 600;
+            }
+            #cc-panel button:active {
+                transform: scale(0.95);
+                filter: brightness(0.9);
+            }
+            #cc-panel button:hover {
+                filter: brightness(1.1);
+            }
+
+            .cc-basket-item {
+                transition: all 0.3s ease;
+                opacity: 1;
+                transform: translateX(0);
+                max-height: 50px;
+                margin-bottom: 4px;
+            }
+            .cc-basket-item.cc-deleting {
+                opacity: 0;
+                transform: translateX(30px);
+                max-height: 0;
+                margin: 0 !important;
+                padding: 0 !important;
+                overflow: hidden;
+            }
+            
+            #cc-panel ::-webkit-scrollbar { width: 6px; }
+            #cc-panel ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+            #cc-panel ::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+            #cc-panel ::-webkit-scrollbar-thumb:hover { background: #777; }
+        `;
+        document.head.appendChild(style);
+    }
 
     /* =========================================
        2. Environment detection
@@ -133,20 +193,97 @@
 
     if (!config) return;
 
+    function convertToMarkdown(element) {
+        const clone = element.cloneNode(true);
+        if (config.ignore) {
+            clone.querySelectorAll(config.ignore).forEach(el => el.remove());
+        }
+        clone.querySelectorAll('.cc-btn').forEach(el => el.remove());
+
+        // 1. Code Blocks
+        clone.querySelectorAll('pre, code').forEach(code => {
+            const isBlock = code.tagName === 'PRE' || (code.parentElement && code.parentElement.tagName === 'PRE');
+            const content = code.innerText;
+            if (isBlock) {
+                let lang = '';
+                const classes = code.className || '';
+                const match = classes.match(/language-(\w+)/);
+                if (match) lang = match[1];
+                code.replaceWith(document.createTextNode(`\n\`\`\`${lang}\n${content}\n\`\`\`\n`));
+            } else {
+                code.replaceWith(document.createTextNode(`\`${content}\``));
+            }
+        });
+
+        // 2. Formatting (Bold, Italic, Header, Link)
+        clone.querySelectorAll('b, strong').forEach(el => el.replaceWith(document.createTextNode(`**${el.innerText}**`)));
+        clone.querySelectorAll('i, em').forEach(el => el.replaceWith(document.createTextNode(`*${el.innerText}*`)));
+        ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].forEach((h, i) => {
+            const hashes = '#'.repeat(i + 1);
+            clone.querySelectorAll(h).forEach(el => el.replaceWith(document.createTextNode(`\n${hashes} ${el.innerText}\n`)));
+        });
+        clone.querySelectorAll('a').forEach(a => {
+            const href = a.getAttribute('href');
+            if (href && !href.startsWith('#')) a.replaceWith(document.createTextNode(`[${a.innerText}](${href})`));
+        });
+        clone.querySelectorAll('li').forEach(li => li.replaceWith(document.createTextNode(`\n- ${li.innerText}`)));
+        clone.querySelectorAll('br').forEach(br => br.replaceWith(document.createTextNode('\n')));
+        clone.querySelectorAll('p, div').forEach(p => p.append(document.createTextNode('\n')));
+
+        return clone.innerText.trim();
+    }
+
+    function estimateTokens(text) {
+        if (!text) return 0;
+        return Math.ceil(text.length / 3.5);
+    }
+
+    function calculateTotalTokens() {
+        const prefix = document.getElementById('cc-prefix-input')?.value || "";
+        let selectedContent = "";
+
+        document.querySelectorAll('.cc-btn[data-selected="true"]').forEach(btn => {
+            selectedContent += convertToMarkdown(btn.parentElement) + "\n";
+        });
+
+        getBasket(basket => {
+            let basketContent = "";
+            basket.forEach(item => basketContent += item.text);
+
+            const totalText = prefix + selectedContent + basketContent;
+            const count = estimateTokens(totalText);
+
+            const display = document.getElementById('cc-token-display');
+            if (display) {
+                const label = LANG_DATA[window.ccManager.lang].token_est;
+                display.innerText = `${label} ${count.toLocaleString()}`;
+
+                display.style.color = count > 30000 ? '#ff9800' : '#aaa';
+            }
+        });
+    }
+
     /* =========================================
        3. Main Functions: Open / Close / Toggle
     ========================================= */
 
     function openInterface() {
         if (window.ccManager.active) return;
+
+        injectStyles();
         window.ccManager.active = true;
 
         console.log("Context-Carry: Enabled");
         createPanel();
+        setTimeout(() => {
+            const panel = document.getElementById('cc-panel');
+            if (panel) panel.classList.add('cc-visible');
+        }, 10);
+
         performScan();
         window.ccManager.interval = setInterval(performScan, 3000);
         checkAutoFill();
-        updateBasketUI(); 
+        updateBasketUI();
     }
 
     function closeInterface() {
@@ -158,11 +295,15 @@
             clearInterval(window.ccManager.interval);
             window.ccManager.interval = null;
         }
+
         const panel = document.getElementById('cc-panel');
-        if (panel) panel.remove();
-        
-        const tooltip = document.getElementById('cc-tooltip');
-        if (tooltip) tooltip.remove();
+        if (panel) {
+            panel.classList.remove('cc-visible');
+            setTimeout(() => {
+                panel.remove();
+                document.getElementById('cc-tooltip')?.remove();
+            }, 300);
+        }
 
         document.querySelectorAll('.cc-btn').forEach(e => e.remove());
         const processedElements = document.querySelectorAll('[data-cc-padding]');
@@ -196,15 +337,13 @@
     ========================================= */
     let title, msg, prefixLabel, prefixInput, btnDl, btnCopy, btnScan, transferLabel, transferContainer, btnSelectAll, btnUnselectAll;
     let basketLabel, basketStatus, btnAddBasket, btnClearBasket, btnPasteBasket, basketPreviewList;
-    let tooltip; // [New] Tooltip Element
+    let tooltip;
 
     function createPanel() {
         if (document.getElementById('cc-panel')) return;
 
         const curLang = window.ccManager.lang;
         const t = LANG_DATA[curLang];
-
-        // [New] Create Shared Tooltip
         tooltip = document.createElement('div');
         tooltip.id = 'cc-tooltip';
         Object.assign(tooltip.style, {
@@ -213,7 +352,7 @@
             padding: '8px 12px', borderRadius: '6px', fontSize: '12px',
             maxWidth: '300px', maxHeight: '200px', overflowY: 'auto',
             border: '1px solid #555', boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
-            pointerEvents: 'none', // Allow clicking through it
+            pointerEvents: 'none',
             whiteSpace: 'pre-wrap', fontFamily: 'monospace'
         });
         document.body.appendChild(tooltip);
@@ -222,21 +361,21 @@
         panel.id = 'cc-panel';
         Object.assign(panel.style, {
             position: 'fixed', top: '80px', right: '20px', zIndex: '2147483647',
-            background: '#1e1e1e', color: '#fff', padding: '16px', borderRadius: '12px',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.5)', fontFamily: 'sans-serif',
-            width: '280px', border: '1px solid #444', textAlign: 'left', display: 'flex', flexDirection: 'column'
+            background: 'rgba(30, 30, 30, 0.95)',
+            color: '#fff', padding: '16px', borderRadius: '12px',
+            width: '280px', textAlign: 'left', display: 'flex', flexDirection: 'column',
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
         });
 
-        // Draggable Logic
         let isDragging = false;
         let dragOffsetX = 0;
         let dragOffsetY = 0;
 
         const header = document.createElement('div');
-        Object.assign(header.style, { 
-            display: 'flex', alignItems: 'center', marginBottom: '12px', 
+        Object.assign(header.style, {
+            display: 'flex', alignItems: 'center', marginBottom: '12px',
             borderBottom: '1px solid #444', paddingBottom: '8px',
-            cursor: 'move', userSelect: 'none' 
+            cursor: 'move', userSelect: 'none'
         });
 
         header.onmousedown = (e) => {
@@ -244,7 +383,7 @@
             const rect = panel.getBoundingClientRect();
             dragOffsetX = e.clientX - rect.left;
             dragOffsetY = e.clientY - rect.top;
-            
+
             panel.style.right = 'auto';
             panel.style.left = rect.left + 'px';
             panel.style.top = rect.top + 'px';
@@ -295,12 +434,9 @@
 
         header.append(title, langBtn, closeBtn);
 
-        // Status Message
         msg = document.createElement('div');
         msg.innerText = t.status_scanning;
         Object.assign(msg.style, { fontSize: '12px', color: '#aaa', marginBottom: '12px' });
-
-        // Prompt Input
         prefixLabel = document.createElement('div');
         prefixLabel.innerText = t.label_prefix;
         Object.assign(prefixLabel.style, { fontSize: '12px', color: '#ccc', marginBottom: '6px', fontWeight: 'bold' });
@@ -309,6 +445,7 @@
         prefixInput.id = 'cc-prefix-input';
         prefixInput.value = t.default_prompt;
         prefixInput.placeholder = t.placeholder;
+        prefixInput.addEventListener('input', calculateTotalTokens);
         Object.assign(prefixInput.style, {
             width: '100%', height: '80px', background: '#333', color: '#eee',
             border: '1px solid #555', borderRadius: '6px', padding: '8px',
@@ -316,7 +453,6 @@
             resize: 'vertical', boxSizing: 'border-box'
         });
 
-        // Buttons Helper
         function createBtn(textKey, bg, onClick) {
             const b = document.createElement('button');
             b.innerText = t[textKey];
@@ -342,17 +478,16 @@
         btnCopy = createBtn('btn_copy', '#555', handleCopyOnly);
         actionRow.append(btnDl, btnCopy);
 
-        // --- Basket UI ---
         const basketContainer = document.createElement('div');
-        Object.assign(basketContainer.style, { 
-            background: '#2d2d2d', padding: '10px', borderRadius: '8px', 
+        Object.assign(basketContainer.style, {
+            background: '#2d2d2d', padding: '10px', borderRadius: '8px',
             marginBottom: '12px', border: '1px solid #444', display: 'flex', flexDirection: 'column'
         });
 
         const basketHeader = document.createElement('div');
         basketHeader.style.display = 'flex';
         basketHeader.style.justifyContent = 'space-between';
-        
+
         basketLabel = document.createElement('div');
         basketLabel.innerText = t.label_basket;
         basketLabel.style.fontSize = '12px';
@@ -369,10 +504,10 @@
         });
         basketStatus.onmouseover = () => basketStatus.style.color = '#fff';
         basketStatus.onmouseout = () => {
-             getBasket(b => {
-                 if(b.length === 0) basketStatus.style.color = '#aaa';
-                 else basketStatus.style.color = '#4CAF50';
-             });
+            getBasket(b => {
+                if (b.length === 0) basketStatus.style.color = '#aaa';
+                else basketStatus.style.color = '#4CAF50';
+            });
         };
         basketStatus.onclick = toggleBasketPreview;
 
@@ -382,7 +517,7 @@
 
         btnAddBasket = createBtn('btn_add_basket', '#E65100', handleAddToBasket);
         btnPasteBasket = createBtn('btn_paste_basket', '#1565C0', handlePasteBasket);
-        
+
         btnClearBasket = document.createElement('button');
         btnClearBasket.innerText = '🗑️';
         btnClearBasket.title = t.btn_clear_basket;
@@ -394,15 +529,21 @@
 
         basketBtnRow.append(btnAddBasket, btnPasteBasket, btnClearBasket);
 
-        // Preview List Container
         basketPreviewList = document.createElement('div');
         Object.assign(basketPreviewList.style, {
             marginTop: '8px', borderTop: '1px solid #444', paddingTop: '4px',
-            maxHeight: '150px', overflowY: 'auto', display: 'none' 
+            maxHeight: '150px', overflowY: 'auto', display: 'none'
         });
 
         basketContainer.append(basketHeader, basketStatus, basketBtnRow, basketPreviewList);
-
+        const tokenDisplay = document.createElement('div');
+        tokenDisplay.id = 'cc-token-display';
+        Object.assign(tokenDisplay.style, {
+            fontSize: '11px', color: '#aaa', marginTop: '4px', marginBottom: '8px',
+            textAlign: 'right', fontWeight: 'bold'
+        });
+        tokenDisplay.innerText = t.token_est + " 0";
+        basketContainer.append(tokenDisplay);
         transferLabel = document.createElement('div');
         transferLabel.innerText = t.label_transfer;
         Object.assign(transferLabel.style, { fontSize: '12px', color: '#ccc', marginBottom: '6px', fontWeight: 'bold' });
@@ -421,7 +562,7 @@
             });
             btn.onmouseover = () => btn.style.borderColor = '#1565C0';
             btn.onmouseout = () => btn.style.borderColor = '#555';
-            btn.onclick = () => handleCrossTransfer(p.url);
+            btn.onclick = () => handleCrossTransfer(p);
             transferContainer.appendChild(btn);
         });
 
@@ -435,7 +576,7 @@
         });
         btnScan.style.border = '1px solid #666';
 
-        panel.append(header, msg, prefixLabel, prefixInput, selectionRow, actionRow, basketContainer, transferLabel, transferContainer, hr, btnScan);
+        panel.append(header, msg, prefixLabel, prefixInput, selectionRow, actionRow, basketContainer, tokenDisplay, transferLabel, transferContainer, hr, btnScan);
         document.body.appendChild(panel);
     }
 
@@ -468,14 +609,11 @@
         if (btnUnselectAll) btnUnselectAll.innerText = t.btn_unselect_all;
         if (btnDl) btnDl.innerText = t.btn_dl;
         if (btnCopy) btnCopy.innerText = t.btn_copy;
-        
         if (basketLabel) basketLabel.innerText = t.label_basket;
         if (btnAddBasket) btnAddBasket.innerText = t.btn_add_basket;
         if (btnPasteBasket) btnPasteBasket.innerText = t.btn_paste_basket;
         if (btnClearBasket) btnClearBasket.title = t.btn_clear_basket;
-        
         updateBasketUI();
-
         if (transferLabel) transferLabel.innerText = t.label_transfer;
         if (btnScan) btnScan.innerText = t.btn_scan;
 
@@ -535,7 +673,7 @@
 
             btn.onclick = function (e) {
                 e.stopPropagation();
-                
+
                 const allBtns = Array.from(document.querySelectorAll('.cc-btn'));
                 const currentIndex = allBtns.indexOf(this);
                 const lastIndex = window.ccManager.lastCheckedIndex;
@@ -556,6 +694,7 @@
 
                 window.ccManager.lastCheckedIndex = currentIndex;
                 updateStatus();
+                calculateTotalTokens();
             };
 
             el.appendChild(btn);
@@ -611,15 +750,7 @@
         let combined = userPrefix + "\n\n====================\n\n";
 
         selected.forEach(btn => {
-            const parent = btn.parentElement;
-            const clone = parent.cloneNode(true);
-            const myBtn = clone.querySelector('.cc-btn');
-            if (myBtn) myBtn.remove();
-            if (config.ignore) {
-                clone.querySelectorAll(config.ignore).forEach(bad => bad.remove());
-            }
-
-            let textContent = clone.innerText.trim();
+            const textContent = convertToMarkdown(btn.parentElement);
             combined += `--- Fragment ---\n${textContent}\n\n`;
         });
         combined += "====================\n[END OF CONTEXT]";
@@ -665,16 +796,16 @@
         getBasket((basket) => {
             const count = basket.length;
             const t = LANG_DATA[window.ccManager.lang];
-            
+
             if (count === 0) {
                 basketStatus.innerText = t.basket_status_empty;
                 basketStatus.style.color = '#aaa';
-                if(basketPreviewList) basketPreviewList.style.display = 'none';
+                if (basketPreviewList) basketPreviewList.style.display = 'none';
                 window.ccManager.isPreviewOpen = false;
             } else {
                 basketStatus.innerText = t.basket_status.replace('{n}', count);
                 basketStatus.style.color = '#4CAF50';
-                
+
                 if (window.ccManager.isPreviewOpen) {
                     renderBasketPreview(basket);
                 }
@@ -685,7 +816,7 @@
     function toggleBasketPreview() {
         if (!basketPreviewList) return;
         const isHidden = basketPreviewList.style.display === 'none';
-        
+
         getBasket((basket) => {
             if (basket.length === 0) return;
 
@@ -704,55 +835,42 @@
         basketPreviewList.innerHTML = '';
         const t = LANG_DATA[window.ccManager.lang];
         const currentPrefix = document.getElementById('cc-prefix-input').value;
-
-        // Hint text
         const hint = document.createElement('div');
         hint.innerText = t.preview_drag_hint;
         hint.style.fontSize = '10px';
-        hint.style.color = '#666';
+        hint.style.color = '#888';
         hint.style.textAlign = 'right';
-        hint.style.marginBottom = '4px';
+        hint.style.marginBottom = '6px';
         basketPreviewList.append(hint);
 
         basket.forEach((item, index) => {
             const row = document.createElement('div');
-            
-            // Enable Drag
+            row.className = 'cc-basket-item';
             row.draggable = true;
             row.dataset.index = index;
 
             Object.assign(row.style, {
-                background: '#383838', padding: '6px', marginBottom: '4px',
-                borderRadius: '4px', fontSize: '11px', display: 'flex', 
-                justifyContent: 'space-between', alignItems: 'center',
-                cursor: 'grab', border: '1px solid transparent', transition: 'all 0.2s',
+                background: '#333',
+                padding: '8px',
+                borderRadius: '6px',
+                fontSize: '11px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                cursor: 'grab',
+                border: '1px solid transparent',
                 position: 'relative'
             });
 
-            // [New] Tooltip Events
             row.onmouseenter = (e) => {
-                if(!tooltip) return;
-                
-                // Prepare clean full text for tooltip
-                let fullClean = item.text;
-                if (currentPrefix && fullClean.startsWith(currentPrefix)) {
-                    fullClean = fullClean.replace(currentPrefix, '');
-                }
-                fullClean = fullClean
-                    .replace(/={5,}/g, '') 
-                    .replace(/--- Fragment ---/g, '') 
-                    .replace(/\[END OF CONTEXT\]/g, '')
-                    .trim();
-                
-                // Truncate for tooltip if excessively long (e.g. > 500 chars)
-                if (fullClean.length > 500) {
-                    fullClean = fullClean.substring(0, 500) + "\n\n(......)";
-                }
+                if (!tooltip) return;
 
+                let fullClean = item.text;
+                if (currentPrefix && fullClean.startsWith(currentPrefix)) fullClean = fullClean.replace(currentPrefix, '');
+                fullClean = fullClean.replace(/={5,}/g, '').replace(/--- Fragment ---/g, '').replace(/\[END OF CONTEXT\]/g, '').trim();
+                if (fullClean.length > 500) fullClean = fullClean.substring(0, 500) + "\n\n(......)";
                 tooltip.innerText = `[Source: ${item.source}]\n\n${fullClean}`;
                 tooltip.style.display = 'block';
-                
-                // Position logic: Show on LEFT of mouse
                 updateTooltipPosition(e);
             };
 
@@ -761,16 +879,15 @@
             };
 
             row.onmouseleave = () => {
-                if(tooltip) tooltip.style.display = 'none';
+                if (tooltip) tooltip.style.display = 'none';
             };
 
-            // Drag Events
             row.ondragstart = (e) => {
                 e.dataTransfer.setData('text/plain', index);
                 row.style.opacity = '0.5';
-                if(tooltip) tooltip.style.display = 'none'; // Hide tooltip on drag
+                if (tooltip) tooltip.style.display = 'none';
             };
-            
+
             row.ondragend = (e) => {
                 row.style.opacity = '1';
                 document.querySelectorAll('#cc-panel [draggable="true"]').forEach(el => {
@@ -795,36 +912,38 @@
                     handleReorderBasket(fromIndex, toIndex);
                 }
             };
-
-            // Snippet Generation (for list view)
             let cleanText = item.text;
             if (currentPrefix && cleanText.startsWith(currentPrefix)) {
                 cleanText = cleanText.replace(currentPrefix, '');
             }
             cleanText = cleanText.replace(/={5,}/g, '').replace(/--- Fragment ---/g, '').replace(/\[END OF CONTEXT\]/g, '').trim();
-            let snippet = cleanText.substring(0, 60).replace(/[\r\n]+/g, ' ');
-            if (cleanText.length > 60) snippet += '...';
+            let snippet = cleanText.substring(0, 50).replace(/[\r\n]+/g, ' ');
+            if (cleanText.length > 50) snippet += '...';
             if (snippet.length === 0) snippet = "(System Prompt Only)";
 
             const info = document.createElement('div');
             info.style.overflow = 'hidden';
-            info.style.pointerEvents = 'none'; 
+            info.style.pointerEvents = 'none';
             info.innerHTML = `
-                <span style="color:#aaa; font-size:9px; font-weight:bold;">${index + 1}. [${item.source}]</span><br/>
-                <span style="color:#ddd; opacity:0.9;">${snippet}</span>
+                <span style="color:#aaa; font-size:9px; font-weight:700;">${index + 1}. [${item.source}]</span><br/>
+                <span style="color:#eee; opacity:0.9;">${snippet}</span>
             `;
 
             const delBtn = document.createElement('button');
-            delBtn.innerText = '×';
+            delBtn.innerHTML = '&times;';
             delBtn.title = t.preview_del_tooltip;
             Object.assign(delBtn.style, {
-                background: 'transparent', border: 'none', color: '#ff5252',
-                fontWeight: 'bold', cursor: 'pointer', marginLeft: '8px', fontSize: '14px',
-                minWidth: '20px'
+                background: 'rgba(255, 82, 82, 0.1)',
+                border: 'none', color: '#ff5252',
+                fontWeight: 'bold', cursor: 'pointer', marginLeft: '8px', fontSize: '16px',
+                borderRadius: '4px', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center'
             });
             delBtn.onclick = (e) => {
-                e.stopPropagation(); 
-                handleDeleteSingleItem(index);
+                e.stopPropagation();
+                row.classList.add('cc-deleting');
+                setTimeout(() => {
+                    handleDeleteSingleItem(index);
+                }, 300);
             };
 
             row.append(info, delBtn);
@@ -834,18 +953,15 @@
 
     function updateTooltipPosition(e) {
         if (!tooltip) return;
-        // Position to the left of the cursor by approx tooltip width (300px) + offset
-        const x = e.clientX - 315; 
+        const x = e.clientX - 315;
         const y = e.clientY + 10;
-        
-        // Simple boundary check: if it goes off-screen left, flip to right
+
         if (x < 10) {
             tooltip.style.left = (e.clientX + 15) + 'px';
         } else {
             tooltip.style.left = x + 'px';
         }
-        
-        // Check bottom boundary
+
         if (y + tooltip.offsetHeight > window.innerHeight) {
             tooltip.style.top = (window.innerHeight - tooltip.offsetHeight - 10) + 'px';
         } else {
@@ -885,7 +1001,7 @@
             });
             chrome.storage.local.set({ 'cc_basket': basket }, () => {
                 showToast(t.toast_basket_add);
-                handleUnselectAll(); 
+                handleUnselectAll();
             });
         });
     }
@@ -905,10 +1021,22 @@
                 alert("Basket is empty!");
                 return;
             }
-            
-            const combinedText = basket.map((item, idx) => 
+
+            const combinedText = basket.map((item, idx) =>
                 `[Part ${idx + 1} from ${item.source}]\n${item.text}`
             ).join("\n\n");
+
+            const currentPlatform = PLATFORMS.find(p => window.location.hostname.includes(p.id));
+            if (currentPlatform) {
+                const est = estimateTokens(combinedText);
+                if (est > currentPlatform.limit) {
+                    const msg = t.token_warn_msg
+                        .replace('{est}', est.toLocaleString())
+                        .replace('{platform}', currentPlatform.name)
+                        .replace('{limit}', currentPlatform.limit.toLocaleString());
+                    if (!confirm(msg)) return;
+                }
+            }
 
             const inputEl = document.querySelector(config.inputSelector);
             if (inputEl) {
@@ -920,24 +1048,31 @@
         });
     }
 
-    function handleCrossTransfer(targetUrl) {
+    function handleCrossTransfer(platformObj) {
         const curLang = window.ccManager.lang;
         const t = LANG_DATA[curLang];
-        
+
         getBasket((basket) => {
             let textToTransfer = null;
-
             if (basket.length > 0) {
-                textToTransfer = basket.map((item, idx) => 
+                textToTransfer = basket.map((item, idx) =>
                     `[Part ${idx + 1} from ${item.source}]\n${item.text}`
                 ).join("\n\n");
             } else {
                 textToTransfer = getSelectedText();
             }
 
-            if (!textToTransfer) { 
-                alert(t.alert_no_selection); 
-                return; 
+            if (!textToTransfer) { alert(t.alert_no_selection); return; }
+
+            const est = estimateTokens(textToTransfer);
+            const limit = platformObj.limit || 30000;
+
+            if (est > limit) {
+                const warnMsg = t.token_warn_msg
+                    .replace('{est}', est.toLocaleString())
+                    .replace('{platform}', platformObj.name)
+                    .replace('{limit}', limit.toLocaleString());
+                if (!confirm(warnMsg)) return;
             }
 
             chrome.storage.local.set({
@@ -947,7 +1082,7 @@
                     source: window.location.hostname
                 }
             }, () => {
-                window.open(targetUrl, '_blank');
+                window.open(platformObj.url, '_blank');
             });
         });
     }
@@ -964,6 +1099,7 @@
         });
 
         if (changed) updateStatus();
+        calculateTotalTokens();
     }
 
     function handleUnselectAll() {
@@ -979,6 +1115,7 @@
 
         if (changed) updateStatus();
         window.ccManager.lastCheckedIndex = null;
+        calculateTotalTokens();
     }
 
     /* =========================================
@@ -1052,6 +1189,7 @@
     chrome.storage.onChanged.addListener((changes, namespace) => {
         if (namespace === 'local' && changes.cc_basket) {
             updateBasketUI();
+            calculateTotalTokens();
         }
     });
 

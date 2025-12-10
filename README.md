@@ -1,14 +1,14 @@
 # Context-Carry: Cross-LLM Chat History Export & Context Manager
 
 [![中文說明](https://img.shields.io/badge/Language-繁體中文-blue)](README_zh-TW.md)
-![Version](https://img.shields.io/badge/version-1.3-blue)
+![Version](https://img.shields.io/badge/version-1.4-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-**Stop losing your context when switching AIs.**
+**Build the perfect context from anywhere, then bring it to any AI.**
 
 **Context-Carry** is a powerful Chrome extension designed for **Chat History Export**, **Prompt Management**, and **Seamless Cross-LLM Transfer**.
 
-It allows you to effortlessly transfer conversation threads between different AI platforms (**ChatGPT**, **Claude**, **Gemini**, and **Grok**) with **One-Click Auto-Fill**.
+It allows you to effortlessly aggregate conversation threads from different AI platforms or extract content from any webpage, reorder them into a coherent narrative, and Auto-Fill them into **ChatGPT**, **Claude**, **Gemini**, or **Grok**.
 
 Stop manually copying and pasting massive walls of text. Select specific messages, attach your custom system prompt, click a target platform, and watch it **automatically fill** the context in the new chat.
 
@@ -16,13 +16,14 @@ Stop manually copying and pasting massive walls of text. Select specific message
 
 ## Features
 
-- **Seamless Cross-LLM Transfer**: Instantly move context between ChatGPT 🤖, Claude.ai 🧠, Google Gemini 💎, and Grok ✖️.
-- **Context Basket (New!)**: Collect conversation fragments from multiple windows/tabs into a staging area, then transfer them all at once.
-- **Draggable Interface (New!)**: The panel is now draggable, so it never blocks your view.
-- **Range Selection (New!)**: Use **Shift + Click** to instantly select a long list of messages.
+- **Universal Web Capture (New!)**: Not just for AI chats! Right-click on any text on any website to add it to your Context Basket instantly.
+- **Cross-Window Context Basket**: The ultimate staging area. Collect snippets from ChatGPT in one tab, a documentation page in another, and a StackOverflow answer in a third.
+- **Drag-and-Drop Reordering (New!)**: Context matters, and so does order. Open the basket preview to drag and rearrange your snippets before transferring.
+- **Token Intelligence (New!)**: Real-time token estimation and smart warnings ensure your context fits within the target AI's limits (e.g., Gemini's 1M window vs. ChatGPT's 32k).
 - **Magic Auto-Fill**: Automatically opens the target AI platform and pastes your context.
-- **Prompt Management**: Save custom system prompts to guide the AI.
-- **Privacy First**: Runs 100% locally. Basket data is auto-cleared on browser restart.
+- **Markdown Formatting**: Automatically converts HTML content (headers, bold text, code blocks) into clean Markdown for better AI comprehension.
+- **Seamless Transfer**: Instantly move your curated context to ChatGPT 🤖, Claude.ai 🧠, Google Gemini 💎, and Grok ✖️.
+- **Draggable Interface**: The panel is now draggable, so it never blocks your view.
 
 ## Screenshots
 
@@ -42,18 +43,25 @@ Coming soon.
 
 ## How to Use
 
-1. Open a chat on any supported AI platform.
-2. Click the **Context-Carry** icon.
-3. **Select Messages**:
-   - Click **➕** to select single messages.
-   - **Hold Shift + Click** to select a range of messages.
-4. **Transfer Options**:
-   - **Direct Transfer**: Click a target platform icon (e.g., Gemini 💎) to open a new tab with the selected text.
-   - **Context Basket (Multi-Window)**:
-     1. Click **"Add (+)"** to save selection to the basket.
-     2. Go to another tab/window and add more content if needed.
-     3. Open the target AI window and click **"Paste Here"** to fill all collected content.
-5. **Basket Management**: Click the arrow (▼) in the basket section to preview, drag-to-reorder, or delete items.
+### Method 1: Capturing AI Chat History
+1. Open a chat on any supported AI platform (ChatGPT, Claude, Gemini, Grok).
+2. Click the **Context-Carry** floating panel.
+3. Click **➕** to select messages (or **Shift + Click** for range selection).
+4. Click **Add (+)** to send them to the Basket.
+
+### Method 2: Capturing from Any Website
+1. Highlight text on any website (docs, news, blogs, coding forums).
+2. **Right-Click** the selected text.
+3. Choose **"Add to Context Basket (+)"** from the menu.
+4. The extension icon badge will update to show the item count.
+
+### Method 3: Organizing & Transferring
+1. Open the Context-Carry panel.
+2. **Review & Reorder**: Click the arrow (**▼**) in the Basket section. **Drag and drop** items to arrange the conversation flow logically.
+3. **Check Tokens**: Glance at the "Est. Tokens" to ensure you are within limits.
+4. **Transfer**:
+   - **New Chat**: Click a platform icon (e.g., Claude 🧠) to open a new tab with the context pre-filled.
+   - **Existing Chat**: Open an existing AI window and click "Paste Here" to inject the basket content.
 
 ## Privacy
 
