@@ -6,9 +6,10 @@
 ![Version](https://img.shields.io/badge/version-1.4.1-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-## 目錄
+<details>
+  <summary>目錄（點擊展開）</summary>
 
-- [快速上手](#快速上手-30-秒流程)
+- [快速上手](#快速上手)
 - [典型使用情境](#典型使用情境typical-use-cases)
 - [核心功能](#核心功能key-features)
 - [操作截圖](#操作截圖)
@@ -18,6 +19,8 @@
 - [免責聲明](#免責聲明)
 - [更新日誌](#更新日誌)
 - [授權](#授權)
+
+</details>
 
 **停止重複撰寫相同提示詞，一鍵在不同 AI 平台之間轉移完整上下文。**
 
@@ -91,7 +94,7 @@ Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功�
 
 ---
 
-## 📸 操作截圖
+## 操作截圖
 
 ![Demo](screenshots/demo.gif)
 
