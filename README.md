@@ -1,21 +1,19 @@
 # Context-Carry — Move Your Chat Context Between ChatGPT, Claude, Grok & Gemini in One Click
 
-## Table of Contents
+<details>
+  <summary>Table of Contents</summary>
 
-- [Quick Start](#quick-start)
-- [Typical Use Cases](#typical-use-cases)
-- [Key Features](#key-features-what-makes-context-carry-different)
-- [Screenshots](#screenshots)
-- [Installation](#installation)
-- [Hpw to use](#how-to-use)
-- [Privacy](#privacy)
-- [Development](#development)
-- [Disclaimer](#disclaimer)
-- [Changelog](#changelog)
-- [License](#license)
-- [Contact](#contact)
-- [Note](#note)
-- [Keywords](#keywords)
+- Quick Start  
+- Typical Use Cases  
+- Key Features  
+- Screenshots  
+- Installation  
+- Privacy  
+- Development  
+- License  
+- Contact  
+
+</details>
 
 [![中文說明](https://img.shields.io/badge/Language-繁體中文-blue)](README_zh-TW.md)
 ![Version](https://img.shields.io/badge/version-1.4.1-blue)
