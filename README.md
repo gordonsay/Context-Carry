@@ -1,5 +1,18 @@
 # Context-Carry — Move Your Chat Context Between ChatGPT, Claude & Gemini in One Click
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Typical Use Cases](#typical-use-cases)
+- [Key Features](#key-features-what-makes-context-carry-different)
+- [Screenshots](#screenshots)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Privacy](#privacy)
+- [Disclaimer](#disclaimer)
+- [Changelog](#changelog)
+- [License](#license)
+
 [![中文說明](https://img.shields.io/badge/Language-繁體中文-blue)](README_zh-TW.md)
 ![Version](https://img.shields.io/badge/version-1.4.1-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -19,6 +32,17 @@ This tool is built for developers, researchers, and power users who constantly s
 > If you use multiple AI tools daily, this extension saves you hours every week.
 
 > **[點此查看中文說明 (Traditional Chinese Version)](README_zh-TW.md)**
+
+## Quick Start (30-Second Workflow)
+
+1. Open **ChatGPT / Claude / Gemini**
+2. Click the floating **Context-Carry panel**
+3. Click **➕** to capture messages  
+   (or **Shift + Click** for batch selection)
+4. Open another AI platform tab
+5. Click **New Chat** → ✅ Auto-filled instantly
+
+That’s it. No copy-paste. No reformatting.
 
 ## Typical Use Cases
 
@@ -40,6 +64,8 @@ This tool is built for developers, researchers, and power users who constantly s
 - **Draggable Interface**: The panel is now draggable, so it never blocks your view.
 
 ## Screenshots
+
+![Context-Carry Demo](screenshots/demo.gif)
 
 ![Simple UI](screenshots/screenshot_gpt.png)
 

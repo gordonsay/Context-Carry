@@ -6,6 +6,19 @@
 ![Version](https://img.shields.io/badge/version-1.4.1-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+## 目錄
+
+- [快速上手](#快速上手-30-秒流程)
+- [典型使用情境](#典型使用情境typical-use-cases)
+- [核心功能](#核心功能key-features)
+- [操作截圖](#操作截圖)
+- [安裝方式](#安裝方式)
+- [使用方式](#使用方式)
+- [隱私說明](#隱私說明)
+- [免責聲明](#免責聲明)
+- [更新日誌](#更新日誌)
+- [授權](#授權)
+
 **停止重複撰寫相同提示詞，一鍵在不同 AI 平台之間轉移完整上下文。**
 
 Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功能，讓你可以：
@@ -20,6 +33,19 @@ Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功�
 適合每天在多個 AI 平台之間切換、又討厭不斷重建 prompt 的你。
 
 > 如果你每天都在使用多個 AI 工具，Context-Carry 每週能幫你節省數小時的重複操作時間。
+
+---
+
+## 快速上手
+
+1. 開啟 **ChatGPT / Claude / Gemini**
+2. 點擊右側的 **Context-Carry 懸浮面板**
+3. 點擊 **➕** 擷取對話  
+   （或使用 **Shift + 點擊** 進行多段選取）
+4. 開啟另一個 AI 平台分頁
+5. 點擊 **New Chat** → ✅ 自動填入完成
+
+全程無需複製貼上、無需重新排版。
 
 ---
 
@@ -66,6 +92,8 @@ Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功�
 ---
 
 ## 📸 操作截圖
+
+![Demo](screenshots/demo.gif)
 
 ![標準 UI](screenshots/screenshot_gpt.png)
 
