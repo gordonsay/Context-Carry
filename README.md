@@ -14,7 +14,7 @@
 - [License](#license)
 
 </details>
-
+[![Chrome Web Store](https://img.shields.io/badge/Chrome_Web_Store-Available-blue?logo=google-chrome&logoColor=white)](https://chromewebstore.google.com/detail/okjnafabngnahdppmbnmefofokpegccm?utm_source=item-share-cb)
 [![中文說明](https://img.shields.io/badge/Language-繁體中文-blue)](README_zh-TW.md)
 ![Version](https://img.shields.io/badge/version-1.4.3-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -94,7 +94,7 @@ Work faster with these built-in hotkeys:
 ## Installation
 
 ### From Chrome Web Store
-Coming soon.
+[Download Context-Carry from Chrome Web Store](https://chromewebstore.google.com/detail/okjnafabngnahdppmbnmefofokpegccm?utm_source=item-share-cb)
 
 ### Manual Installation (Developer Mode)
 1. Download the latest release source code or clone this repository.

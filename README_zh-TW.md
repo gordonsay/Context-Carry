@@ -2,6 +2,7 @@
 
 > [🔙 返回英文版本（English Version）](README.md)
 
+[![Chrome Web Store](https://img.shields.io/badge/Chrome_Web_Store-Available-blue?logo=google-chrome&logoColor=white)](https://chromewebstore.google.com/detail/okjnafabngnahdppmbnmefofokpegccm?utm_source=item-share-cb)
 [![Language](https://img.shields.io/badge/Language-English-blue)](README.md)
 ![Version](https://img.shields.io/badge/version-1.4.3-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -128,7 +129,7 @@ Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功�
 ## 安裝方式
 
 ### Chrome 線上應用程式商店
-即將上架。
+[在擴充商店下載](https://chromewebstore.google.com/detail/okjnafabngnahdppmbnmefofokpegccm?utm_source=item-share-cb)
 
 ### 手動安裝（開發者模式）
 
