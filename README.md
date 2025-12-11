@@ -79,7 +79,7 @@ That’s it. No copy-paste. No reformatting.
 
 ![Simple UI](screenshots/screenshot_gpt.png)
 
-![Advanced UI](screenshots/screenshot_gpt_advanced.png)
+![Advanced UI](screenshots/ui.png)
 
 ## Keyboard Shortcuts
 
