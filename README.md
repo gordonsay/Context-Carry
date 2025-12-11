@@ -16,7 +16,7 @@
 </details>
 
 [![中文說明](https://img.shields.io/badge/Language-繁體中文-blue)](README_zh-TW.md)
-![Version](https://img.shields.io/badge/version-1.4.2-blue)
+![Version](https://img.shields.io/badge/version-1.4.3-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **Stop rewriting the same prompt. Carry your full context across AI platforms instantly.**
@@ -24,6 +24,8 @@
 Context-Carry is a lightweight Chrome extension that lets you:
 
 - ✅ Extract chat history from ChatGPT, Claude, Gemini, and Grok  
+- ✅ **Capture text from ANY website** (StackOverflow, Gmail, Docs) via Universal Collector Mode  
+- ✅ **Drag & Drop** selected text directly into your context basket  
 - ✅ **Visually select** text from any webpage using a paintbrush tool  
 - ✅ Reorder everything into a clean, structured context  
 - ✅ Auto-fill it into a new AI chat with one click  
@@ -51,13 +53,15 @@ That’s it. No copy-paste. No reformatting.
 - 🔁 Move a long ChatGPT discussion directly into Claude for deeper reasoning  
 - 🖌️ Visually circle code snippets or paragraphs on a documentation site to capture them instantly  
 - 🧪 Carry debugging conversations between multiple LLMs  
-- 📚 Collect documentation + StackOverflow answers + chat history into one clean prompt  
+- 📚 **Research Mode**: Drag code from GitHub, errors from StackOverflow, and requirements from Gmail into one unified prompt context.
 - 📏 Avoid context limit crashes with real-time token calculation
 
 ## Key Features (What Makes Context-Carry Different)
 
-- **Visual Area Selection (New! 🖌️)**: Activate the paintbrush mode to freely circle any area on a webpage. All text inside your drawing is automatically extracted and cleaned.
-- **Smart Export Options (New!)**: When exporting, if you have both "Basket Items" and "Current Page Selection," the extension intelligently asks if you want to export **only the basket**, **only the page**, or **merge both**.
+- **Drag-and-Drop Capture**: Users can now drag selected text directly from the webpage and drop it onto the Context-Carry panel to instantly add it to the Basket.
+- **Universal Collector Mode**: The interface now automatically switches to a specialized "Collector Mode" on non-AI websites (e.g., Gmail, StackOverflow, GitLab).
+- **Visual Area Selection (🖌️)**: Activate the paintbrush mode to freely circle any area on a webpage. All text inside your drawing is automatically extracted and cleaned.
+- **Smart Export Options **: When exporting, if you have both "Basket Items" and "Current Page Selection," the extension intelligently asks if you want to export **only the basket**, **only the page**, or **merge both**.
 - **Clean Context Architecture**: System prompts (Prefixes) are now managed separately from content. Adding items to the basket creates "clean" data, ensuring you don't get repetitive system prompts when merging multiple sources.
 - **Cross-Window Token Sync**: Token estimation is now synchronized across tabs. Adding an item in Tab A immediately updates the estimated token count in Tab B.
 - **Cross-Window Context Basket**: The ultimate staging area. Collect snippets from ChatGPT in one tab, a documentation page in another, and a StackOverflow answer in a third.
@@ -70,6 +74,8 @@ That’s it. No copy-paste. No reformatting.
 ![Context-Carry Demo](screenshots/demo.gif)
 
 ![Context-Carry Demo](screenshots/circle.gif)
+
+![Context-Carry Demo](screenshots/drag.gif)
 
 ![Simple UI](screenshots/screenshot_gpt.png)
 
@@ -116,7 +122,12 @@ Coming soon.
 2. **Right-Click** the selected text.
 3. Choose **"Add to Context Basket (+)"** from the menu.
 
-### Method 4: Exporting & Transferring
+### Method 4: Drag-and-Drop Capture
+1. Select any text on a webpage.
+2. Drag the selected text towards the Context-Carry panel.
+3. Drop it when you see the green **"Drop to Add"** overlay.
+
+### Method 5: Exporting & Transferring
 1. **Review**: Open the basket preview to reorder items if needed.
 2. **Export**: Click "Export to .txt" or "Copy to Clipboard".
    - *Smart Choice*: If you have both a basket and a current selection, a popup will ask which one you want to export (or merge both).

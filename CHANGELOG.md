@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ------------------------------------------------------------------------
 
+## [1.4.3] - 2025-12-11
+
+### Added
+- **Drag-and-Drop Capture:**
+  - Users can now drag selected text directly from the webpage and drop it onto the Context-Carry panel to instantly add it to the Basket.
+  - Added a visual **"Drop to Add"** overlay effect when dragging content over the panel.
+- **Universal Collector Mode:**
+  - **Adaptive UI:** The interface now automatically switches to a specialized "Collector Mode" on non-AI websites (e.g., Gmail, StackOverflow, GitLab).
+  - **Focused Layout:** Hides irrelevant transfer buttons on unsupported sites while keeping the **Context Basket**, **Area Selection**, and **Export tools** fully accessible via the Advanced drawer.
+
+### Changed
+- **Basket UX Improvements:**
+  - Refined the drag-and-drop sorting logic within the Basket Preview list for smoother reordering and better visual feedback.
+  - Improved the delete animation for basket items.
+- **Stability & Compatibility:**
+  - **Critical Fix:** Resolved a crash issue on websites with strict Content Security Policies (CSP) or specific DOM structures (e.g., Gmail, GitLab, StackOverflow) where the UI failed to initialize.
+  - **Error Handling:** Removed intrusive alert popups in favor of non-blocking toast notifications and console logging for a seamless user experience.
+- **Performance:** Removed debug logs and optimized the initialization sequence to prevent race conditions on page load.
+
+------------------------------------------------------------------------
+
 ## [1.4.2] - 2025-12-11
 
 ### Added

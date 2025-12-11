@@ -1,7 +1,3 @@
-/* =========================================
-   Background Service Worker - ActiveTab Mode
-========================================= */
-
 chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.local.remove(['cc_basket', 'cc_transfer_payload'], () => {
         console.log("Context-Carry: Storage cleared on install/update.");
@@ -49,7 +45,7 @@ chrome.action.onClicked.addListener(async (tab) => {
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId === "cc-add-to-basket" && info.selectionText) {
         if (tab && tab.id && !tab.url.startsWith("chrome://")) {
-            try { await ensureContentScript(tab.id); } catch(e) {}
+            try { await ensureContentScript(tab.id); } catch (e) { }
         }
 
         addToBasketFromBackground(info.selectionText, tab);
@@ -90,7 +86,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
             chrome.storage.local.get(['cc_transfer_payload'], (result) => {
                 if (result.cc_transfer_payload) {
                     const isFresh = (Date.now() - result.cc_transfer_payload.timestamp < 30000);
-                    
+
                     if (isFresh) {
                         console.log(`Context-Carry: Detected target LLM (${tab.url}) with pending payload. Injecting...`);
                         ensureContentScript(tabId);

@@ -94,7 +94,8 @@
             preview_words: '字數',
             preview_cancel: '取消',
             preview_confirm: '加入採集籃',
-            source_area_select: ' (圈選)'
+            source_area_select: ' (圈選)',
+            alert_llm_only: '自動填入功能 (Auto-fill) 僅支援(ChatGPT, Claude, Gemini, Grok)'
         },
         'en': {
             title: 'Context-Carry',
@@ -138,267 +139,272 @@
             preview_words: 'Chars',
             preview_cancel: 'Cancel',
             preview_confirm: 'Add to Basket',
-            source_area_select: ' (Area Select)'
+            source_area_select: ' (Area Select)',
+            alert_llm_only: 'Auto-fill is only available on supported(ChatGPT, Claude, Gemini, Grok)'
         }
     };
 
     function injectStyles() {
         if (document.getElementById('cc-styles')) return;
-        const style = document.createElement('style');
-        style.id = 'cc-styles';
-        style.textContent = `
-            #cc-panel {
-                transform: translateX(30px);
-                opacity: 0;
-                transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.3s ease;
-                position: fixed;
-                top: 80px;
-                right: 20px;
-                z-index: 2147483647;
-            }
-            #cc-panel.cc-visible {
-                transform: translateX(0);
-                opacity: 1;
-            }
-            #cc-panel {
-                --cc-bg: #ffffff;
-                --cc-text: #334155;
-                --cc-text-sub: #64748b;
-                --cc-border: #e2e8f0;
-                --cc-shadow: 0 10px 30px rgba(0,0,0,0.12);
-                --cc-btn-bg: #f8fafc;
-                --cc-btn-hover: #f1f5f9;
-                --cc-primary: #3b82f6;
-                --cc-drawer-bg: #f8fafc;
+        try {
+            const style = document.createElement('style');
+            style.id = 'cc-styles';
+            style.appendChild(document.createTextNode(`
+                #cc-panel {
+                    transform: translateX(30px);
+                    opacity: 0;
+                    transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.3s ease;
+                    position: fixed;
+                    top: 80px;
+                    right: 20px;
+                    z-index: 2147483647;
+                }
+                #cc-panel.cc-visible {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+                #cc-panel {
+                    --cc-bg: #ffffff;
+                    --cc-text: #334155;
+                    --cc-text-sub: #64748b;
+                    --cc-border: #e2e8f0;
+                    --cc-shadow: 0 10px 30px rgba(0,0,0,0.12);
+                    --cc-btn-bg: #f8fafc;
+                    --cc-btn-hover: #f1f5f9;
+                    --cc-primary: #3b82f6;
+                    --cc-drawer-bg: #f8fafc;
 
-                /* platform specific colours */
-                --gpt-bg: #ecfdf5; --gpt-text: #059669; --gpt-border: #a7f3d0;
-                --cld-bg: #fffbeb; --cld-text: #d97706; --cld-border: #fde68a;
-                --gem-bg: #eff6ff; --gem-text: #2563eb; --gem-border: #bfdbfe;
-                --grk-bg: #f3f4f6; --grk-text: #1f2937; --grk-border: #e5e7eb;
-            }
-            #cc-panel[data-theme="dark"] {
-                --cc-bg: #1e1e1e;
-                --cc-text: #e2e8f0;
-                --cc-text-sub: #94a3b8;
-                --cc-border: #333333;
-                --cc-shadow: 0 10px 40px rgba(0,0,0,0.5);
-                --cc-btn-bg: #2d2d2d;
-                --cc-btn-hover: #3d3d3d;
-                --cc-primary: #60a5fa;
-                --cc-drawer-bg: #252525;
-                --gpt-bg: rgba(16,185,129,0.15); --gpt-text: #34d399; --gpt-border: rgba(16,185,129,0.3);
-                --cld-bg: rgba(245,158,11,0.15); --cld-text: #fbbf24; --cld-border: rgba(245,158,11,0.3);
-                --gem-bg: rgba(59,130,246,0.15); --gem-text: #60a5fa; --gem-border: rgba(59,130,246,0.3);
-                --grk-bg: rgba(255,255,255,0.1); --grk-text: #e5e7eb; --grk-border: rgba(255,255,255,0.2);
-            }
+                    /* platform specific colours */
+                    --gpt-bg: #ecfdf5; --gpt-text: #059669; --gpt-border: #a7f3d0;
+                    --cld-bg: #fffbeb; --cld-text: #d97706; --cld-border: #fde68a;
+                    --gem-bg: #eff6ff; --gem-text: #2563eb; --gem-border: #bfdbfe;
+                    --grk-bg: #f3f4f6; --grk-text: #1f2937; --grk-border: #e5e7eb;
+                }
+                #cc-panel[data-theme="dark"] {
+                    --cc-bg: #1e1e1e;
+                    --cc-text: #e2e8f0;
+                    --cc-text-sub: #94a3b8;
+                    --cc-border: #333333;
+                    --cc-shadow: 0 10px 40px rgba(0,0,0,0.5);
+                    --cc-btn-bg: #2d2d2d;
+                    --cc-btn-hover: #3d3d3d;
+                    --cc-primary: #60a5fa;
+                    --cc-drawer-bg: #252525;
+                    --gpt-bg: rgba(16,185,129,0.15); --gpt-text: #34d399; --gpt-border: rgba(16,185,129,0.3);
+                    --cld-bg: rgba(245,158,11,0.15); --cld-text: #fbbf24; --cld-border: rgba(245,158,11,0.3);
+                    --gem-bg: rgba(59,130,246,0.15); --gem-text: #60a5fa; --gem-border: rgba(59,130,246,0.3);
+                    --grk-bg: rgba(255,255,255,0.1); --grk-text: #e5e7eb; --grk-border: rgba(255,255,255,0.2);
+                }
 
-            #cc-panel.cc-panel {
-                width: 260px;
-                background: var(--cc-bg);
-                color: var(--cc-text);
-                border: 1px solid var(--cc-border);
-                border-radius: 16px;
-                box-shadow: var(--cc-shadow);
-                padding: 16px;
-                font-size: 13px;
-                display: flex;
-                flex-direction: column;
-            }
+                #cc-panel.cc-panel {
+                    width: 260px;
+                    background: var(--cc-bg);
+                    color: var(--cc-text);
+                    border: 1px solid var(--cc-border);
+                    border-radius: 16px;
+                    box-shadow: var(--cc-shadow);
+                    padding: 16px;
+                    font-size: 13px;
+                    display: flex;
+                    flex-direction: column;
+                }
 
-            #cc-panel .cc-header {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 12px;
-                padding-bottom: 8px;
-                border-bottom: 1px solid var(--cc-border);
-                cursor: move;
-                user-select: none;
-            }
-            #cc-panel .cc-title {
-                font-weight: 700;
-                display: flex;
-                align-items: center;
-                gap: 6px;
-            }
-            #cc-panel .cc-status {
-                font-size: 10px;
-                background: var(--cc-primary);
-                color: #fff;
-                padding: 2px 6px;
-                border-radius: 10px;
-            }
-            #cc-panel .cc-controls {
-                display: flex;
-                gap: 6px;
-            }
-            #cc-panel .cc-icon-btn {
-                background: transparent;
-                border: none;
-                cursor: pointer;
-                color: var(--cc-text-sub);
-                font-size: 14px;
-                padding: 2px;
-                border-radius: 4px;
-                transition: 0.2s;
-            }
-            #cc-panel .cc-icon-btn:hover {
-                background: var(--cc-btn-hover);
-                color: var(--cc-text);
-            }
+                #cc-panel .cc-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 12px;
+                    padding-bottom: 8px;
+                    border-bottom: 1px solid var(--cc-border);
+                    cursor: move;
+                    user-select: none;
+                }
+                #cc-panel .cc-title {
+                    font-weight: 700;
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                }
+                #cc-panel .cc-status {
+                    font-size: 10px;
+                    background: var(--cc-primary);
+                    color: #fff;
+                    padding: 2px 6px;
+                    border-radius: 10px;
+                }
+                #cc-panel .cc-controls {
+                    display: flex;
+                    gap: 6px;
+                }
+                #cc-panel .cc-icon-btn {
+                    background: transparent;
+                    border: none;
+                    cursor: pointer;
+                    color: var(--cc-text-sub);
+                    font-size: 14px;
+                    padding: 2px;
+                    border-radius: 4px;
+                    transition: 0.2s;
+                }
+                #cc-panel .cc-icon-btn:hover {
+                    background: var(--cc-btn-hover);
+                    color: var(--cc-text);
+                }
 
-            #cc-panel .cc-msg {
-                font-size: 11px;
-                color: var(--cc-text-sub);
-                margin-bottom: 8px;
-            }
+                #cc-panel .cc-msg {
+                    font-size: 11px;
+                    color: var(--cc-text-sub);
+                    margin-bottom: 8px;
+                }
 
-            #cc-panel .cc-grid {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 8px;
-                margin-bottom: 12px;
-            }
-            #cc-panel .platform-btn {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                padding: 8px 12px;
-                border-radius: 8px;
-                cursor: pointer;
-                transition: all 0.2s;
-                border: 1px solid transparent;
-                font-weight: 600;
-                font-size: 12px;
-            }
-            #cc-panel .platform-btn:hover {
-                transform: translateY(-1px);
-                filter: brightness(1.05);
-            }
-            #cc-panel .platform-btn i {
-                font-style: normal;
-                font-size: 16px;
-            }
-            #cc-panel .p-chatgpt { background: var(--gpt-bg); color: var(--gpt-text); border-color: var(--gpt-border); }
-            #cc-panel .p-claude { background: var(--cld-bg); color: var(--cld-text); border-color: var(--cld-border); }
-            #cc-panel .p-gemini { background: var(--gem-bg); color: var(--gem-text); border-color: var(--gem-border); }
-            #cc-panel .p-grok { background: var(--grk-bg); color: var(--grk-text); border-color: var(--grk-border); }
+                #cc-panel .cc-grid {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 8px;
+                    margin-bottom: 12px;
+                }
+                #cc-panel .platform-btn {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 8px 12px;
+                    border-radius: 8px;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    border: 1px solid transparent;
+                    font-weight: 600;
+                    font-size: 12px;
+                }
+                #cc-panel .platform-btn:hover {
+                    transform: translateY(-1px);
+                    filter: brightness(1.05);
+                }
+                #cc-panel .platform-btn i {
+                    font-style: normal;
+                    font-size: 16px;
+                }
+                #cc-panel .p-chatgpt { background: var(--gpt-bg); color: var(--gpt-text); border-color: var(--gpt-border); }
+                #cc-panel .p-claude { background: var(--cld-bg); color: var(--cld-text); border-color: var(--cld-border); }
+                #cc-panel .p-gemini { background: var(--gem-bg); color: var(--gem-text); border-color: var(--gem-border); }
+                #cc-panel .p-grok { background: var(--grk-bg); color: var(--grk-text); border-color: var(--grk-border); }
 
-            #cc-panel .cc-tools {
-                display: flex;
-                gap: 6px;
-                margin-bottom: 8px;
-            }
-            #cc-panel .tool-btn {
-                flex: 1;
-                padding: 6px;
-                background: var(--cc-btn-bg);
-                border: 1px solid var(--cc-border);
-                color: var(--cc-text);
-                border-radius: 6px;
-                cursor: pointer;
-                font-size: 11px;
-                font-weight: 500;
-                transition: 0.2s;
-            }
-            #cc-panel .tool-btn:hover {
-                background: var(--cc-btn-hover);
-                border-color: var(--cc-text-sub);
-            }
+                #cc-panel .cc-tools {
+                    display: flex;
+                    gap: 6px;
+                    margin-bottom: 8px;
+                }
+                #cc-panel .tool-btn {
+                    flex: 1;
+                    padding: 6px;
+                    background: var(--cc-btn-bg);
+                    border: 1px solid var(--cc-border);
+                    color: var(--cc-text);
+                    border-radius: 6px;
+                    cursor: pointer;
+                    font-size: 11px;
+                    font-weight: 500;
+                    transition: 0.2s;
+                }
+                #cc-panel .tool-btn:hover {
+                    background: var(--cc-btn-hover);
+                    border-color: var(--cc-text-sub);
+                }
 
-            #cc-panel .cc-drawer-toggle {
-                text-align: center;
-                color: var(--cc-text-sub);
-                font-size: 10px;
-                cursor: pointer;
-                padding: 4px;
-                user-select: none;
-                margin-top: 4px;
-            }
-            #cc-panel .cc-drawer-toggle:hover {
-                color: var(--cc-text);
-            }
+                #cc-panel .cc-drawer-toggle {
+                    text-align: center;
+                    color: var(--cc-text-sub);
+                    font-size: 10px;
+                    cursor: pointer;
+                    padding: 4px;
+                    user-select: none;
+                    margin-top: 4px;
+                }
+                #cc-panel .cc-drawer-toggle:hover {
+                    color: var(--cc-text);
+                }
 
-            #cc-panel .cc-drawer {
-                max-height: 0;
-                overflow: hidden;
-                opacity: 0;
-                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-                background: var(--cc-drawer-bg);
-                margin: 0 -16px -16px -16px;
-                border-radius: 0 0 16px 16px;
-                border-top: 1px solid var(--cc-border);
-            }
-            #cc-panel.expanded .cc-drawer {
-                max-height: 600px;
-                opacity: 1;
-                padding: 12px 16px;
-                margin-top: 8px;
-            }
-            #cc-panel.expanded .arrow {
-                transform: rotate(180deg);
-                display: inline-block;
-            }
+                #cc-panel .cc-drawer {
+                    max-height: 0;
+                    overflow: hidden;
+                    opacity: 0;
+                    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                    background: var(--cc-drawer-bg);
+                    margin: 0 -16px -16px -16px;
+                    border-radius: 0 0 16px 16px;
+                    border-top: 1px solid var(--cc-border);
+                }
+                #cc-panel.expanded .cc-drawer {
+                    max-height: 600px;
+                    opacity: 1;
+                    padding: 12px 16px;
+                    margin-top: 8px;
+                }
+                #cc-panel.expanded .arrow {
+                    transform: rotate(180deg);
+                    display: inline-block;
+                }
 
-            #cc-panel .cc-input {
-                width: 100%;
-                box-sizing: border-box;
-                background: var(--cc-bg);
-                color: var(--cc-text);
-                border: 1px solid var(--cc-border);
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 11px;
-                margin-bottom: 8px;
-                resize: vertical;
-                height: 120px;
-                min-height: 80px;
-                line-height: 1.4;
-            }
-            #cc-panel .basket-info {
-                display: flex;
-                justify-content: space-between;
-                font-size: 11px;
-                color: var(--cc-text-sub);
-                margin-bottom: 4px;
-            }
-            #cc-panel .basket-preview-list {
-                margin-top: 4px;
-                max-height: 150px;
-                overflow-y: auto;
-                font-size: 11px;
-                color: var(--cc-text);
-            }
-            #cc-panel .empty-basket {
-                font-size: 10px;
-                color: var(--cc-text-sub);
-                text-align: center;
-                padding: 10px;
-                border: 1px dashed var(--cc-border);
-                border-radius: 6px;
-            }
-            #cc-panel .cc-basket-item {
-                transition: all 0.3s ease;
-                opacity: 1;
-                transform: translateX(0);
-                max-height: 60px;
-                margin-bottom: 4px;
-            }
-            #cc-panel .cc-basket-item.cc-deleting {
-                opacity: 0;
-                transform: translateX(30px);
-                max-height: 0;
-                margin: 0 !important;
-                padding: 0 !important;
-                overflow: hidden;
-            }
-            #cc-panel ::-webkit-scrollbar { width: 6px; }
-            #cc-panel ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
-            #cc-panel ::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
-            #cc-panel ::-webkit-scrollbar-thumb:hover { background: #777; }
-        `;
-        document.head.appendChild(style);
+                #cc-panel .cc-input {
+                    width: 100%;
+                    box-sizing: border-box;
+                    background: var(--cc-bg);
+                    color: var(--cc-text);
+                    border: 1px solid var(--cc-border);
+                    border-radius: 6px;
+                    padding: 8px;
+                    font-size: 11px;
+                    margin-bottom: 8px;
+                    resize: vertical;
+                    height: 120px;
+                    min-height: 80px;
+                    line-height: 1.4;
+                }
+                #cc-panel .basket-info {
+                    display: flex;
+                    justify-content: space-between;
+                    font-size: 11px;
+                    color: var(--cc-text-sub);
+                    margin-bottom: 4px;
+                }
+                #cc-panel .basket-preview-list {
+                    margin-top: 4px;
+                    max-height: 150px;
+                    overflow-y: auto;
+                    font-size: 11px;
+                    color: var(--cc-text);
+                }
+                #cc-panel .empty-basket {
+                    font-size: 10px;
+                    color: var(--cc-text-sub);
+                    text-align: center;
+                    padding: 10px;
+                    border: 1px dashed var(--cc-border);
+                    border-radius: 6px;
+                }
+                #cc-panel .cc-basket-item {
+                    transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+                    opacity: 1;
+                    transform: translate3d(0,0,0);
+                    max-height: 60px;
+                    margin-bottom: 4px;
+                }
+                #cc-panel .cc-basket-item.cc-deleting {
+                    opacity: 0;
+                    transform: translateX(30px);
+                    max-height: 0;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    overflow: hidden;
+                }
+                #cc-panel ::-webkit-scrollbar { width: 6px; }
+                #cc-panel ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+                #cc-panel ::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+                #cc-panel ::-webkit-scrollbar-thumb:hover { background: #777; }
+            `));
+            (document.head || document.documentElement).appendChild(style);
+        } catch (e) {
+            console.error("Context-Carry: Style injection failed (CSP block?):", e);
+        }
     }
 
     /* =========================================
@@ -408,7 +414,7 @@
     let config = null;
 
     if (host.includes('chatgpt')) config = APP_CONFIG['chatgpt.com'];
-    else if (host.includes('google')) config = APP_CONFIG['google.com'];
+    else if (host.includes('gemini.google.com')) config = APP_CONFIG['google.com'];
     else if (host.includes('claude')) config = APP_CONFIG['claude.ai'];
     else if (host.includes('x.com') || host.includes('grok.com')) config = APP_CONFIG['grok'];
 
@@ -417,7 +423,7 @@
 
     function convertToMarkdown(element) {
         const clone = element.cloneNode(true);
-        if (config.ignore) {
+        if (config && config.ignore) {
             clone.querySelectorAll(config.ignore).forEach(el => el.remove());
         }
         clone.querySelectorAll('.cc-btn').forEach(el => el.remove());
@@ -488,11 +494,20 @@
     function openInterface() {
         if (window.ccManager.active) return;
 
-        injectStyles();
+        try {
+            injectStyles();
+        } catch (e) {
+            console.error("Context-Carry: Critical error in injectStyles", e);
+        }
         window.ccManager.active = true;
 
-        console.log("Context-Carry: Enabled");
-        createPanel();
+        try {
+            createPanel();
+        } catch (e) {
+            console.error("Context-Carry: createPanel crashed!", e);
+            window.ccManager.active = false;
+            return;
+        }
         setTimeout(() => {
             const panel = document.getElementById('cc-panel');
             if (panel) panel.classList.add('cc-visible');
@@ -502,15 +517,17 @@
             performScan();
             window.ccManager.interval = setInterval(performScan, 3000);
         }
-        checkAutoFill();
-        updateBasketUI();
+        try {
+            checkAutoFill();
+            updateBasketUI();
+        } catch (e) {
+            console.error("Context-Carry: Error in post-panel logic", e);
+        }
     }
 
     function closeInterface() {
         if (!window.ccManager.active) return;
         window.ccManager.active = false;
-
-        console.log("Context-Carry: Disabled");
         if (window.ccManager.interval) {
             clearInterval(window.ccManager.interval);
             window.ccManager.interval = null;
@@ -560,15 +577,6 @@
     let tooltip;
 
     function createPanel() {
-        if (!window.ccManager.config) {
-             msg.style.display = 'none';
-             btnSelectAll.style.display = 'none';
-             btnUnselectAll.style.display = 'none';
-             transferContainer.style.display = 'none'; 
-             if(transferLabel) transferLabel.style.display = 'none';
-             const curLang = window.ccManager.lang;
-             title.textContent = curLang === 'zh' ? 'Context-Carry (採集模式)' : 'Context-Carry (Collector)';
-        }
         if (document.getElementById('cc-panel')) return;
         const curLang = window.ccManager.lang;
         const t = LANG_DATA[curLang];
@@ -694,11 +702,6 @@
         drawerToggle.onclick = () => {
             panel.classList.toggle('expanded');
         };
-
-        if (!window.ccManager.config) {
-            btnScan.style.display = 'none';
-        }
-
         const drawer = document.createElement('div');
         drawer.className = 'cc-drawer';
 
@@ -743,9 +746,33 @@
         btnPasteBasket.textContent = t.btn_paste_basket;
         btnPasteBasket.onclick = handlePasteBasket;
         basketBtnRow.append(btnAddBasket, btnPasteBasket);
+        const basketContainer = document.createElement('div');
+        Object.assign(basketContainer.style, {
+            position: 'relative',
+            minHeight: '60px',
+            marginTop: '8px',
+            borderRadius: '8px',
+            transition: 'all 0.2s'
+        });
         basketPreviewList = document.createElement('div');
         basketPreviewList.className = 'basket-preview-list';
         basketPreviewList.style.display = 'none';
+        const dropOverlay = document.createElement('div');
+        dropOverlay.className = 'cc-drop-overlay';
+        dropOverlay.innerHTML = `
+            <div style="font-size: 24px; margin-bottom: 4px;">📥</div>
+            <div style="font-size: 12px; font-weight: bold;">Drop to Add to Basket</div>
+        `;
+        Object.assign(dropOverlay.style, {
+            position: 'absolute', top: '0', left: '0', width: '100%', height: '100%',
+            backgroundColor: 'rgba(76, 175, 80, 0.9)',
+            color: '#fff',
+            display: 'none',
+            flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            borderRadius: '8px', zIndex: '10', backdropFilter: 'blur(2px)',
+            pointerEvents: 'none'
+        });
+        basketContainer.append(basketPreviewList, dropOverlay);
         const tokenDisplay = document.createElement('div');
         tokenDisplay.id = 'cc-token-display';
         tokenDisplay.style.fontSize = '11px';
@@ -782,8 +809,64 @@
             }, 1000);
         };
         extraActions.append(btnPaint, btnDl, btnScan);
-        drawer.append(prefixLabel, prefixInput, basketInfo, basketBtnRow, basketPreviewList, tokenDisplay, extraActions);
+        drawer.append(prefixLabel, prefixInput, basketInfo, basketBtnRow, basketContainer, tokenDisplay, extraActions);
         panel.append(header, msg, transferLabel, transferContainer, toolsRow, drawerToggle, drawer);
+        panel.addEventListener('dragover', (e) => {
+            if (e.dataTransfer.types.includes('application/cc-sort')) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            if (!panel.classList.contains('expanded')) {
+                panel.classList.add('expanded');
+            }
+            if (basketPreviewList.style.display === 'none') {
+                toggleBasketPreview();
+            }
+            dropOverlay.style.display = 'flex';
+            basketContainer.style.boxShadow = '0 0 15px rgba(76, 175, 80, 0.5)';
+            basketContainer.style.transform = 'scale(1.02)';
+        });
+        panel.addEventListener('dragleave', (e) => {
+            if (panel.contains(e.relatedTarget)) return;
+            dropOverlay.style.display = 'none';
+            basketContainer.style.boxShadow = 'none';
+            basketContainer.style.transform = 'scale(1)';
+        });
+
+        panel.addEventListener('drop', (e) => {
+            dropOverlay.style.display = 'none';
+            basketContainer.style.boxShadow = 'none';
+            basketContainer.style.transform = 'scale(1)';
+            if (e.dataTransfer.types.includes('application/cc-sort')) return;
+
+            e.preventDefault();
+            const text = e.dataTransfer.getData('text');
+
+            if (text && text.trim().length > 0) {
+                getBasket((basket) => {
+                    basket.push({
+                        text: text.trim(),
+                        timestamp: Date.now(),
+                        source: window.location.hostname + " (Drag & Drop)"
+                    });
+                    chrome.storage.local.set({ 'cc_basket': basket }, () => {
+                        showToast("已拖曳加入籃子 🧺");
+                        updateBasketUI();
+                    });
+                });
+            }
+        });
+
+        if (!window.ccManager.config) {
+            if (msg) msg.style.display = 'none';
+            if (btnSelectAll) btnSelectAll.style.display = 'none';
+            if (btnUnselectAll) btnUnselectAll.style.display = 'none';
+            if (transferContainer) transferContainer.style.display = 'none';
+            if (transferLabel) transferLabel.style.display = 'none';
+            if (btnScan) btnScan.style.display = 'none';
+            const curLang = window.ccManager.lang;
+            title.textContent = curLang === 'zh' ? 'Context-Carry (採集模式)' : 'Context-Carry (Collector)';
+        }
+
         document.body.appendChild(panel);
         makeDraggable(panel, header);
     }
@@ -996,14 +1079,14 @@
         let combined = "";
         if (includePrefix) {
             const userPrefix = document.getElementById('cc-prefix-input').value;
-            if(userPrefix) combined += userPrefix + "\n\n====================\n\n";
+            if (userPrefix) combined += userPrefix + "\n\n====================\n\n";
         }
 
         selected.forEach(btn => {
             const textContent = convertToMarkdown(btn.parentElement);
             combined += `--- Fragment ---\n${textContent}\n\n`;
         });
-        
+
         if (includePrefix) {
             combined += "====================\n[END OF CONTEXT]";
         }
@@ -1013,7 +1096,7 @@
     function constructFinalContent(pageSelection, basketItems) {
         const prefix = document.getElementById('cc-prefix-input')?.value || "";
         let finalContent = "";
-        
+
         if (prefix) {
             finalContent += prefix + "\n\n====================\n\n";
         }
@@ -1024,11 +1107,11 @@
 
         if (basketItems && basketItems.length > 0) {
             if (pageSelection) finalContent += "\n========== [ BASKET CONTENT ] ==========\n\n";
-            
-            const basketText = basketItems.map((item, idx) => 
+
+            const basketText = basketItems.map((item, idx) =>
                 `[Basket Item ${idx + 1} from ${item.source}]\n${item.text}`
             ).join("\n\n--------------------\n\n");
-            
+
             finalContent += basketText;
         }
 
@@ -1038,7 +1121,7 @@
 
     function resolveContentToExport(callback) {
         const t = LANG_DATA[window.ccManager.lang];
-        
+
         getBasket((basket) => {
             const pageText = getSelectedText(false);
             const hasBasket = (basket && basket.length > 0);
@@ -1061,7 +1144,7 @@
                     }
                     callback(finalContent);
                 });
-            } 
+            }
             else {
                 const finalContent = constructFinalContent(pageText, basket);
                 callback(finalContent);
@@ -1137,9 +1220,9 @@
 
     function handleCopyOnly() {
         const t = LANG_DATA[window.ccManager.lang];
-        
+
         getBasket((basket) => {
-            const pageText = getSelectedText(false); 
+            const pageText = getSelectedText(false);
             if (!pageText && (!basket || basket.length === 0)) {
                 alert(t.alert_no_selection);
                 return;
@@ -1199,16 +1282,15 @@
         });
     }
 
+    let draggingIndex = null;
     function renderBasketPreview(basket) {
         basketPreviewList.innerHTML = '';
         const t = LANG_DATA[window.ccManager.lang];
         const currentPrefix = document.getElementById('cc-prefix-input').value;
+
         const hint = document.createElement('div');
         hint.innerText = t.preview_drag_hint;
-        hint.style.fontSize = '10px';
-        hint.style.color = '#888';
-        hint.style.textAlign = 'right';
-        hint.style.marginBottom = '6px';
+        Object.assign(hint.style, { fontSize: '10px', color: '#888', textAlign: 'right', marginBottom: '6px' });
         basketPreviewList.append(hint);
 
         basket.forEach((item, index) => {
@@ -1218,21 +1300,15 @@
             row.dataset.index = index;
 
             Object.assign(row.style, {
-                background: '#333',
-                padding: '8px',
-                borderRadius: '6px',
-                fontSize: '11px',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                cursor: 'grab',
-                border: '1px solid transparent',
-                position: 'relative'
+                background: '#333', padding: '8px', borderRadius: '6px', fontSize: '11px',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                cursor: 'grab', border: '2px solid transparent',
+                position: 'relative', marginBottom: '4px',
+                transition: 'transform 0.1s'
             });
 
             row.onmouseenter = (e) => {
-                if (!tooltip) return;
-
+                if (!tooltip || draggingIndex !== null) return;
                 let fullClean = item.text;
                 if (currentPrefix && fullClean.startsWith(currentPrefix)) fullClean = fullClean.replace(currentPrefix, '');
                 fullClean = fullClean.replace(/={5,}/g, '').replace(/--- Fragment ---/g, '').replace(/\[END OF CONTEXT\]/g, '').trim();
@@ -1241,49 +1317,67 @@
                 tooltip.style.display = 'block';
                 updateTooltipPosition(e);
             };
-
-            row.onmousemove = (e) => {
-                updateTooltipPosition(e);
-            };
-
-            row.onmouseleave = () => {
-                if (tooltip) tooltip.style.display = 'none';
-            };
-
+            row.onmousemove = (e) => updateTooltipPosition(e);
+            row.onmouseleave = () => { if (tooltip) tooltip.style.display = 'none'; };
             row.ondragstart = (e) => {
+                draggingIndex = index;
                 e.dataTransfer.setData('text/plain', index);
+                e.dataTransfer.setData('application/cc-sort', 'true');
+                e.dataTransfer.effectAllowed = 'move';
+
                 row.style.opacity = '0.5';
                 if (tooltip) tooltip.style.display = 'none';
             };
 
             row.ondragend = (e) => {
+                draggingIndex = null;
                 row.style.opacity = '1';
-                document.querySelectorAll('#cc-panel [draggable="true"]').forEach(el => {
-                    el.style.borderTop = '1px solid transparent';
-                    el.style.borderBottom = '1px solid transparent';
+                document.querySelectorAll('.cc-basket-item').forEach(el => {
+                    el.style.borderTopColor = 'transparent';
+                    el.style.borderBottomColor = 'transparent';
                 });
             };
+            row.ondragover = (e) => {
+                e.preventDefault();
+                if (!e.dataTransfer.types.includes('application/cc-sort')) {
+                    e.dataTransfer.dropEffect = 'copy';
+                    return;
+                }
 
-            row.ondragover = (e) => { e.preventDefault(); };
-            row.ondragenter = (e) => {
-                e.preventDefault();
-                row.style.border = '1px dashed #4CAF50';
+                if (draggingIndex === index || draggingIndex === null) return;
+
+                e.dataTransfer.dropEffect = 'move';
+
+                const rect = row.getBoundingClientRect();
+                const midY = rect.top + (rect.height / 2);
+                if (e.clientY < midY) {
+                    row.style.borderTopColor = '#4CAF50';
+                    row.style.borderBottomColor = 'transparent';
+                } else {
+                    row.style.borderBottomColor = '#4CAF50';
+                    row.style.borderTopColor = 'transparent';
+                }
             };
+
             row.ondragleave = (e) => {
-                row.style.border = '1px solid transparent';
+                row.style.borderTopColor = 'transparent';
+                row.style.borderBottomColor = 'transparent';
             };
+
             row.ondrop = (e) => {
+                if (!e.dataTransfer.types.includes('application/cc-sort')) return;
+
                 e.preventDefault();
+                e.stopPropagation();
+                row.style.borderTopColor = 'transparent';
+                row.style.borderBottomColor = 'transparent';
                 const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
-                const toIndex = index;
-                if (fromIndex !== toIndex) {
-                    handleReorderBasket(fromIndex, toIndex);
+                if (fromIndex !== index && !isNaN(fromIndex)) {
+                    handleReorderBasket(fromIndex, index);
                 }
             };
             let cleanText = item.text;
-            if (currentPrefix && cleanText.startsWith(currentPrefix)) {
-                cleanText = cleanText.replace(currentPrefix, '');
-            }
+            if (currentPrefix && cleanText.startsWith(currentPrefix)) cleanText = cleanText.replace(currentPrefix, '');
             cleanText = cleanText.replace(/={5,}/g, '').replace(/--- Fragment ---/g, '').replace(/\[END OF CONTEXT\]/g, '').trim();
             let snippet = cleanText.substring(0, 50).replace(/[\r\n]+/g, ' ');
             if (cleanText.length > 50) snippet += '...';
@@ -1301,17 +1395,15 @@
             delBtn.innerHTML = '&times;';
             delBtn.title = t.preview_del_tooltip;
             Object.assign(delBtn.style, {
-                background: 'rgba(255, 82, 82, 0.1)',
-                border: 'none', color: '#ff5252',
-                fontWeight: 'bold', cursor: 'pointer', marginLeft: '8px', fontSize: '16px',
-                borderRadius: '4px', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                background: 'rgba(255, 82, 82, 0.1)', border: 'none', color: '#ff5252',
+                fontWeight: 'bold', cursor: 'pointer', marginLeft: '8px',
+                width: '24px', height: '24px', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                pointerEvents: 'auto'
             });
             delBtn.onclick = (e) => {
                 e.stopPropagation();
                 row.classList.add('cc-deleting');
-                setTimeout(() => {
-                    handleDeleteSingleItem(index);
-                }, 300);
+                setTimeout(() => handleDeleteSingleItem(index), 300);
             };
 
             row.append(info, delBtn);
@@ -1357,7 +1449,7 @@
     }
 
     function handleAddToBasket() {
-        const text = getSelectedText(false); 
+        const text = getSelectedText(false);
         const t = LANG_DATA[window.ccManager.lang];
         if (!text) { alert(t.alert_no_selection); return; }
 
@@ -1383,8 +1475,12 @@
     }
 
     function handlePasteBasket() {
+        const t = LANG_DATA[window.ccManager.lang];
+        if (!window.ccManager.config) {
+            alert(t.alert_llm_only);
+            return;
+        }
         getBasket((basket) => {
-            const t = LANG_DATA[window.ccManager.lang];
             if (basket.length === 0) { alert("Basket is empty!"); return; }
             const finalContent = constructFinalContent(null, basket);
             const currentPlatform = PLATFORMS.find(p => window.location.hostname.includes(p.id));
@@ -1464,12 +1560,11 @@
     ========================================= */
     function checkAutoFill() {
         if (!chrome.storage) return;
+        if (!window.ccManager.config) return;
 
         chrome.storage.local.get(['cc_transfer_payload'], (result) => {
             const data = result.cc_transfer_payload;
             if (data && (Date.now() - data.timestamp < 30000)) {
-
-                console.log("Context-Carry: Found transfer data from " + data.source);
                 let attempts = 0;
                 const maxAttempts = 20;
 
@@ -1484,7 +1579,6 @@
                         attempts++;
                         if (attempts >= maxAttempts) {
                             clearInterval(fillInterval);
-                            console.log("Context-Carry: Timeout waiting for input box.");
                         }
                     }
                 }, 500);
@@ -1554,7 +1648,7 @@
     /* =========================================
        7. Keyboard Shortcuts
     ========================================= */
-    document.addEventListener('keydown', function(e) {
+    document.addEventListener('keydown', function (e) {
         const tag = e.target?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) {
             return;
@@ -1616,16 +1710,16 @@
         paintPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
         paintPath.setAttribute("stroke", "#4CAF50");
         paintPath.setAttribute("stroke-width", "3");
-        paintPath.setAttribute("fill", "none"); 
+        paintPath.setAttribute("fill", "none");
         paintPath.setAttribute("stroke-linejoin", "round");
         paintPath.setAttribute("stroke-linecap", "round");
-        
+
         paintSvg.appendChild(paintPath);
         document.body.appendChild(paintSvg);
 
         paintSvg.addEventListener('mousedown', startDraw);
         document.addEventListener('keydown', onEscKey);
-        
+
         const t = LANG_DATA[window.ccManager.lang];
         showToast(t.toast_enter_paint || "Draw to select text (ESC to exit)");
     }
@@ -1667,7 +1761,7 @@
         const lastPoint = points[points.length - 1];
         if (lastPoint) {
             const dist = Math.hypot(e.clientX - lastPoint.x, e.clientY - lastPoint.y);
-            if (dist < 5) return; 
+            if (dist < 5) return;
         }
         points.push({ x: e.clientX, y: e.clientY });
         updatePath();
@@ -1699,18 +1793,18 @@
         } else {
             const t = LANG_DATA[window.ccManager.lang];
             showToast(t.paint_no_text);
-            setTimeout(closeSelectionMode, 500); 
+            setTimeout(closeSelectionMode, 500);
         }
     }
 
     function onSegment(p, q, r) {
         return q.x <= Math.max(p.x, r.x) && q.x >= Math.min(p.x, r.x) &&
-               q.y <= Math.max(p.y, r.y) && q.y >= Math.min(p.y, r.y);
+            q.y <= Math.max(p.y, r.y) && q.y >= Math.min(p.y, r.y);
     }
 
     function orientation(p, q, r) {
         const val = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
-        if (val === 0) return 0; 
+        if (val === 0) return 0;
         return (val > 0) ? 1 : 2;
     }
 
@@ -1731,14 +1825,14 @@
 
     function isSelfIntersecting(polyPoints) {
         if (polyPoints.length < 4) return false;
-        
+
         for (let i = 0; i < polyPoints.length - 1; i++) {
             const p1 = polyPoints[i];
-            const q1 = polyPoints[i+1];
+            const q1 = polyPoints[i + 1];
             for (let j = i + 2; j < polyPoints.length - 1; j++) {
                 const p2 = polyPoints[j];
-                const q2 = polyPoints[j+1];
-                
+                const q2 = polyPoints[j + 1];
+
                 if (doIntersect(p1, q1, p2, q2)) {
                     return true;
                 }
@@ -1753,7 +1847,7 @@
         for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
             let xi = vs[i].x, yi = vs[i].y;
             let xj = vs[j].x, yj = vs[j].y;
-            
+
             let intersect = ((yi > y) != (yj > y)) &&
                 (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
             if (intersect) inside = !inside;
@@ -1788,25 +1882,25 @@
                     }
 
                     const centerY = rect.top + rect.height / 2;
-                    
-                    const step = 30; 
-                    
+
+                    const step = 30;
+
                     if (rect.width < step) {
                         const centerX = rect.left + rect.width / 2;
-                        if (isPointInPolygon({x: centerX, y: centerY}, polygonPoints)) {
+                        if (isPointInPolygon({ x: centerX, y: centerY }, polygonPoints)) {
                             return NodeFilter.FILTER_ACCEPT;
                         }
                     } else {
                         for (let x = rect.left + 5; x < rect.right; x += step) {
-                            if (isPointInPolygon({x: x, y: centerY}, polygonPoints)) {
+                            if (isPointInPolygon({ x: x, y: centerY }, polygonPoints)) {
                                 return NodeFilter.FILTER_ACCEPT;
                             }
                         }
-                        if (isPointInPolygon({x: rect.right - 5, y: centerY}, polygonPoints)) {
+                        if (isPointInPolygon({ x: rect.right - 5, y: centerY }, polygonPoints)) {
                             return NodeFilter.FILTER_ACCEPT;
                         }
                     }
-                    
+
                     return NodeFilter.FILTER_REJECT;
                 }
             }

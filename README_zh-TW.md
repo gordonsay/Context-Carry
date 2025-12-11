@@ -3,7 +3,7 @@
 > [🔙 返回英文版本（English Version）](README.md)
 
 [![Language](https://img.shields.io/badge/Language-English-blue)](README.md)
-![Version](https://img.shields.io/badge/version-1.4.2-blue)
+![Version](https://img.shields.io/badge/version-1.4.3-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 <details>
@@ -27,10 +27,12 @@
 Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功能，讓你可以：
 
 - ✅ 從 ChatGPT、Claude、Gemini、Grok 擷取對話紀錄  
-- ✅ 從任何網站擷取重要文字（文件、部落格、StackOverflow）  
+- ✅ **從任何網站擷取重要文字**（StackOverflow、Gmail、文件）透過通用採集模式  
+- ✅ **拖曳 (Drag & Drop)** 選取文字直接丟入採集籃  
+- ✅ 透過畫筆工具 **視覺化圈選** 網頁文字  
 - ✅ 重新排序並建構乾淨、具邏輯的上下文內容  
 - ✅ 一鍵自動填入到新的 AI 對話視窗  
-- ✅ 即時 Token 預估，避免超出上下文長度限制  
+- ✅ 即時 Token 預估（跨分頁同步），避免超出上下文長度限制
 
 這款工具專為**開發者、研究人員與高頻 AI 使用者**設計，  
 適合每天在多個 AI 平台之間切換、又討厭不斷重建 prompt 的你。
@@ -56,7 +58,7 @@ Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功�
 
 - 🔁 將長篇 ChatGPT 討論一鍵轉移到 Claude 進行深度推理  
 - 🧪 在不同 LLM 之間交叉比對 Debug 對話  
-- 📚 收集 文件 + StackOverflow + Chat 討論 組成單一乾淨 Prompt  
+- 📚 **研究模式 (Research Mode)**：將 GitHub 的程式碼、StackOverflow 的錯誤訊息、Gmail 的需求規格拖曳整合到同一個 Prompt 上下文中。
 - 🧠 重複使用結構良好的提示詞，而不是每次重貼  
 - 📏 透過 Token 預估避免 Context Window 爆掉  
 
@@ -64,35 +66,35 @@ Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功�
 
 ## 核心功能（Key Features）
 
-- **畫筆圈選擷取（Area Select / 圈選區域）🖌️【New!】**
-  啟動圈選模式後，可自由在任何網站畫出區域，系統會自動擷取該區域內的所有文字，並顯示即時預覽確認視窗。
+- **拖曳採集 (Drag-and-Drop Capture) 📥【New!】**
+  看到有用的內容？直接選取網頁上的文字，將其**拖曳**到 Context-Carry 面板上。當出現綠色 **"Drop to Add"** 覆蓋層時放開，即可瞬間加入採集籃。
 
-- **跨網站通用擷取**
-  不只支援 AI 聊天頁，在任何網站中選取文字，右鍵即可加入 Context Basket。
+- **通用採集模式 (Universal Collector Mode) 🌐【New!】**
+  介面現在會自動適應環境。在非 AI 網站（如 Gmail, StackOverflow, GitLab）上，會自動切換為專注的「採集模式」，讓你專心收集跨網頁的研究資料。
 
-- **跨視窗 Context Basket**
-  你可以同時從多個分頁（AI、文件、論壇、技術文章）收集片段，最後一次整理後轉移。
+- **畫筆圈選擷取 (Visual Area Selection) 🖌️**
+  啟動圈選模式後，可自由在任何網站畫出區域，系統會自動擷取並清理該區域內的所有文字，並顯示即時預覽。
 
-- **拖曳排序**
-  可在 Basket 中自由拖曳調整順序，重組 AI 理解的敘事流程。
+- **智慧匯出選項 (Smart Export Options)**
+  當同時擁有「採集籃內容」與「當前頁面選取」時，擴充功能會智慧詢問您要匯出 **僅採集籃**、**僅頁面**、或是 **合併兩者**。
 
-- **Token 智慧估算（Cross-Tab 同步）**
-  Token 預估數量會在不同分頁即時同步更新，避免超出上下文長度限制。
+- **乾淨上下文架構 (Clean Context Architecture)**
+  System Prompt（前綴提示詞）現在與內容完全分離管理。加入採集籃的資料是「乾淨」的，避免在合併多個來源時混入重複的 System Prompt。
 
-- **System Prompt 乾淨分離（Clean Context）**
-  System Prompt（前綴提示詞）與實際內容正式分離管理，加入 Basket 的內容不再混入重複的 system prompt，避免多來源合併時污染上下文。
+- **跨視窗 Context Basket (採集籃)**
+  終極的暫存區。你可以同時從多個分頁（AI、文件、論壇、技術文章）收集片段，最後一次整理後轉移。
 
-- **智慧輸出排程（Smart Export Choice）**
-  當 Basket 與頁面選取內容同時存在時，匯出時可選擇：
-  - 僅輸出頁面
-  - 僅輸出 Basket
-  - 合併輸出（Append）
+- **跨視窗 Token 同步 (Cross-Window Token Sync)**
+  Token 預估數量現在會在所有分頁間即時同步。在分頁 A 加入項目，分頁 B 的預估值也會立即更新。
+
+- **拖曳排序 (Drag-and-Drop Reordering)**
+  上下文的順序很重要。在採集籃預覽中，你可以自由拖曳調整順序，重組 AI 理解的敘事流程。
 
 - **Magic Auto-Fill 自動填入**
   自動開啟目標 AI 網站並填入整理好的內容，完全免貼上。
 
 - **Markdown 格式轉換**
-  自動將 HTML 轉為乾淨 Markdown（標題、粗體、程式碼區塊）。
+  自動將 HTML 轉為乾淨 Markdown（標題、粗體、程式碼區塊），提升 AI 閱讀理解力。
 
 - **可拖曳懸浮介面**
   面板位置可自由拖移，不會遮擋畫面。
@@ -104,6 +106,8 @@ Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功�
 ![Demo](screenshots/demo.gif)
 
 ![Demo](screenshots/circle.gif)
+
+![Demo](screenshots/drag.gif)
 
 ![標準 UI](screenshots/screenshot_gpt.png)
 
@@ -167,14 +171,18 @@ Context-Carry 是一款輕量、專為進階使用者打造的 Chrome 擴充功�
 
 ---
 
-### 方法四：整理與轉移上下文
+### 方法四：拖曳採集 (Drag-and-Drop)
+1. 在網頁上選取任何文字
+2. 將選取的文字**拖曳**至 Context-Carry 面板方向
+3. 當看到綠色的 **"Drop to Add"** 覆蓋層時放開滑鼠即可
 
-1. 點擊 Context-Carry 面板
-2. 點擊 Basket 箭頭 **▼** → 可拖曳重新排序
-3. 查看 **Est. Tokens（預估 Token）**
-4. 選擇轉移方式：
-   - ✅ **New Chat**：開新分頁並自動填入
-   - ✅ **Existing Chat**：在目前視窗點擊 **Paste Here**
+---
+
+### 方法五：匯出與轉移
+1. **檢視**：開啟 Basket 預覽並依需求拖曳排序
+2. **匯出**：點擊「輸出為 .txt」或「複製到剪貼簿」
+   - *智慧選擇*：若同時有 Basket 與頁面選取，系統會詢問匯出範圍
+3. **轉移**：點擊平台圖示（如 Claude 🧠）開啟新分頁並自動填入內容
 
 ---
 
