@@ -1,8 +1,9 @@
 {
     "manifest_version": 3,
-    "name": "Context-Carry - AI Conversation Transfer",
+    "name": "__MSG_appName__",
     "version": "1.4.3",
-    "description": "Stop losing context! Export chat history from ChatGPT, Claude, Gemini & Grok. Seamless Cross-LLM transfer & prompt management.",
+    "description": "__MSG_appDesc__",
+    "default_locale": "en",
     "permissions": [
         "activeTab",
         "scripting",
