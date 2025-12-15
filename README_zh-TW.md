@@ -43,9 +43,8 @@
 ---
 
 ## 🔧 安裝方式
-### Chrome 應用商店
-即將上架
-<!-- [前往 Chrome Web Store 安裝](https://chromewebstore.google.com/detail/okjnafabngnahdppmbnmefofokpegccm) -->
+### Chrome 應用商店 - v1.4.3 尚未新增AI發送功能
+[前往 Chrome Web Store 安裝](https://chromewebstore.google.com/detail/okjnafabngnahdppmbnmefofokpegccm)
 
 ### 手動安裝 (開發者模式)
 1. 下載此儲存庫 (Repo)

@@ -44,9 +44,8 @@
 ---
 
 ## 🔧 Installation
-### Chrome Web Store
-Late Update
-<!-- [Install from Chrome Web Store](https://chromewebstore.google.com/detail/okjnafabngnahdppmbnmefofokpegccm) -->
+### Chrome Web Store - v1.4.3 (without AI send)
+[Install from Chrome Web Store](https://chromewebstore.google.com/detail/okjnafabngnahdppmbnmefofokpegccm)
 
 ### Manual  
 1. Download this repo  
