@@ -39,6 +39,7 @@
 
 ![Context-Carry Demo](screenshots/drag.gif)
 
+![Context-Carry Demo](screenshots/demo_carrier.gif)
 ---
 
 ## 🔧 安裝方式
