@@ -48,15 +48,11 @@
   </tr>
 
   <tr>
-    <td width="30%">
-      <h3 align="center">Simple Collect</h3>
-      <img src="screenshots_git/flight.webp" width="100%" />
-    </td>
-    <td width="30%">
+    <td width="48%">
       <h3 align="center">Circle Select</h3>
       <img src="screenshots_git/circle.webp" width="100%" />
     </td>
-    <td width="30%">
+    <td width="48%">
       <h3 align="center">Drag & Drop</h3>
       <img src="screenshots_git/drag.webp" width="100%" />
     </td>
