@@ -2,7 +2,7 @@
     /* =========================================
        0. Global State Management & Guard
     ========================================= */
-    const IS_STORE_BUILD = true;
+    const IS_STORE_BUILD = false;
 
     if (window._cc_is_injected) return;
     window._cc_is_injected = true;
