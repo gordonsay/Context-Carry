@@ -1,14 +1,15 @@
 {
     "manifest_version": 3,
     "name": "__MSG_appName__",
-    "version": "1.5.0",
+    "version": "1.6.0",
     "description": "__MSG_appDesc__",
     "default_locale": "en",
     "permissions": [
         "activeTab",
         "scripting",
         "storage",
-        "contextMenus"
+        "contextMenus",
+        "unlimitedStorage"
     ],
     "host_permissions": [
         "https://chatgpt.com/*",
@@ -20,10 +21,14 @@
         "https://api.anthropic.com/*",
         "https://generativelanguage.googleapis.com/*",
         "https://api.x.ai/*",
-        "http://localhost/*"
+        "http://localhost:11434/*",
+        "http://127.0.0.1:11434/*",
+        "http://localhost:1234/*",
+        "http://127.0.0.1:1234/*"
     ],
     "background": {
-        "service_worker": "background.js"
+        "service_worker": "background.js",
+        "type": "module"
     },
     "action": {
         "default_title": "Open Context-Carry",
@@ -33,6 +38,24 @@
             "128": "icons/icon128.png"
         }
     },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://chatgpt.com/*",
+                "https://claude.ai/*",
+                "https://gemini.google.com/*",
+                "https://grok.com/*",
+                "https://x.com/*"
+            ],
+            "js": [
+                "assets_style.js",
+                "assets_lang.js",
+                "config.js",
+                "content.js"
+            ],
+            "run_at": "document_end"
+        }
+    ],
     "icons": {
         "16": "icons/icon16.png",
         "48": "icons/icon48.png",

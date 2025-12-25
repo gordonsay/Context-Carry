@@ -2,1280 +2,244 @@
     /* =========================================
        0. Global State Management & Guard
     ========================================= */
-    if (typeof window.ccManager === 'undefined') {
-        window.ccManager = {
-            active: false,
-            uiMode: 'standard',
-            interval: null,
-            lang: 'en',
-            config: null,
-            lastCheckedIndex: null,
-            isPreviewOpen: false,
-            aiConfig: null,
-            lastAiContext: "",
-            unreadAi: false,
-            lastAiText: "",
-            lastAiConfig: null,
-        };
-    } else {
-        if (window.ccManager.toggleFn) {
-            window.ccManager.toggleFn();
-        }
-        return;
+    const IS_STORE_BUILD = true;
+
+    if (window._cc_is_injected) return;
+    window._cc_is_injected = true;
+
+    const userLang = (navigator.language && navigator.language.startsWith('zh')) ? 'zh' : 'en';
+
+    const CONFIG = window.CC_CONFIG || { PLATFORMS: [], APP_CONFIG: {}, MODEL_PRESETS: {} };
+    const { PLATFORMS, APP_CONFIG, MODEL_PRESETS } = CONFIG;
+
+    const state = {
+        active: false,
+        uiMode: 'robot',
+        interval: null,
+        lang: userLang,
+        langData: (typeof CC_LANG_DATA !== 'undefined') ? CC_LANG_DATA : {},
+        config: null,
+        lastCheckedIndex: null,
+        isPreviewOpen: false,
+        aiConfig: null,
+        lastAiContext: "",
+        unreadAi: false,
+        lastAiText: "",
+        lastAiConfig: null,
+        allAiConfigs: [],
+        hasShownQuadWarning: false,
+        multiPanelConfigs: [],
+        isUnlocked: false,
+        aiLayoutMode: 'single',
+        activeContextPanelIndex: 0,
+        aiModalTab: 'response',
+        theme: 'dark',
+        basketListeners: new Set(),
+        viewMode: 'basket',
+        activeFolderId: 'inbox',
+        maxFolders: 5
+    };
+
+    let basket = [];
+    let draggedItem = null;
+    state.workflowConnections = [];
+    let updateHoverCardUI = () => { };
+
+    function shouldShowAI() {
+        if (!IS_STORE_BUILD) return true;
+        if (state && state.isUnlocked) return true;
+        return state.allAiConfigs &&
+            state.allAiConfigs.length > 0 &&
+            state.allAiConfigs.some(c => c.configured);
     }
 
+    function debounce(func, wait) {
+        let timeout;
+        return function (...args) {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func.apply(this, args), wait);
+        };
+    }
+
+    function escapeHTML(str) {
+        if (!str) return '';
+        return str.replace(/[&<>'"]/g,
+            tag => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                "'": '&#39;',
+                '"': '&quot;'
+            }[tag])
+        );
+    }
+
+    function syncPiPIfOpen() {
+        if (!state.pipWindow || state.pipWindow.closed) return;
+
+        try {
+            if (typeof renderPiPList === 'function') {
+                renderPiPList(state.pipWindow);
+            }
+            const mb = state.pipWindow.document.getElementById('mini-basket');
+            if (mb && mb.classList.contains('open')) {
+                if (typeof renderMiniBasket === 'function') {
+                    renderMiniBasket(state.pipWindow);
+                }
+            }
+
+            if (typeof updatePiPUITexts === 'function') {
+                updatePiPUITexts(state.pipWindow);
+            }
+        } catch (e) {
+            console.warn('[cc] syncPiPIfOpen failed:', e);
+        }
+    }
+
+    function updateBasketItemPatch(id, patch, done) {
+        if (!id) return;
+        basketOp({
+            kind: 'UPDATE',
+            id,
+            patch: { ...patch, timestamp: Date.now() }
+        }, () => {
+            updateBasketUI();
+            calculateTotalTokens();
+            syncPiPIfOpen();
+            if (typeof done === 'function') done();
+        });
+    }
+
+    function updateBasketItemText(id, newText, done) {
+        return updateBasketItemPatch(id, { text: newText }, done);
+    }
+
+    function failDownstream(sourceId, reason, isPiP = false) {
+        const sid = parseInt(sourceId);
+
+        const outgoing = state.workflowConnections.filter(c => parseInt(c.from) === sid);
+
+        outgoing.forEach(conn => {
+            const childId = parseInt(conn.to);
+            const childNode = state.multiPanelConfigs.find(p => p.id === childId);
+
+            if (childNode && !childNode.hasUpstreamError) {
+                childNode.isFinished = true;
+                childNode.hasUpstreamError = true;
+
+                const errorMsg = `[System] Canceled: Upstream node #${String(sid).slice(-3)} failed/stopped.`;
+                childNode.responseText = (childNode.responseText || "") + "\n" + errorMsg;
+
+                const panelEl = document.getElementById(`panel-${childId}`);
+                if (panelEl) {
+                    const statusTag = panelEl.querySelector('.cc-status-tag');
+                    const outArea = panelEl.querySelector('.output-area');
+
+                    if (panelEl) {
+                        panelEl.classList.remove('active');
+                        panelEl.classList.remove('processing');
+                    }
+
+                    if (statusTag) {
+                        statusTag.innerText = "Canceled";
+                        statusTag.style.color = "#ff9800";
+                    }
+                    if (outArea) {
+                        outArea.innerText = childNode.responseText;
+                        outArea.scrollTop = outArea.scrollHeight;
+                    }
+                }
+
+                if (isPiP && state.pipWindow && state.pipWindow.document) {
+                    const pipNode = state.pipWindow.document.getElementById(`pip-node-${childId}`);
+                    if (pipNode) {
+                        const statusTxt = pipNode.querySelector('.node-status');
+                        const outArea = pipNode.querySelector('.node-output');
+
+                        if (statusTxt) {
+                            statusTxt.innerText = "CANCELED";
+                            statusTxt.className = "node-status busy";
+                            statusTxt.style.color = "#ff9800";
+                        }
+                        if (outArea) {
+                            outArea.value = childNode.responseText;
+                        }
+                    }
+                }
+
+                failDownstream(childId, reason, isPiP);
+            }
+        });
+    }
 
     /* =========================================
-       1. Language dictionary and settings
+       1. Settings
     ========================================= */
-    const PLATFORMS = [
-        { id: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com/?model=gpt-4o', icon: '🤖', limit: 30000 },
-        { id: 'claude', name: 'Claude', url: 'https://claude.ai/new', icon: '🧠', limit: 180000 },
-        { id: 'gemini', name: 'Gemini', url: 'https://gemini.google.com/app', icon: '💎', limit: 1000000 },
-        { id: 'grok', name: 'Grok', url: 'https://grok.com', icon: '✖️', limit: 100000 }
-    ];
 
-    const APP_CONFIG = {
-        'chatgpt.com': {
-            msgSelector: '[data-message-author-role="assistant"].text-message, .user-message-bubble-color',
-            inputSelector: '#prompt-textarea',
-            ignore: '.sr-only, button, .cb-buttons'
+    const WORKFLOW_TEMPLATES = {
+        'clean': {
+            name: 'Empty Canvas',
+            nodes: []
         },
-        'gemini.google.com': {
-            msgSelector: 'user-query, model-response',
-            inputSelector: 'div[contenteditable="true"], .rich-textarea, textarea',
-            ignore: '.mat-icon, .action-button, .button-label, .botones-acciones'
+        'summary_keywords': {
+            name: 'Summary & Keywords',
+            nodes: [
+                { id: 1, x: 50, y: 100, title: '📑 Summarizer', context: 'Please summarize the following content in 3 bullet points:' },
+                { id: 2, x: 400, y: 100, title: '🏷️ Key Extractor', context: 'Extract 5 main keywords from the summary:' }
+            ],
+            connections: [{ from: 1, to: 2 }]
         },
-        'claude.ai': {
-            msgSelector: '.font-user-message, .font-claude-response, div[data-testid="user-message"]',
-            inputSelector: '.ProseMirror[contenteditable="true"]',
-            ignore: 'button, .copy-icon, [data-testid="chat-message-actions"], .cursor-pointer, [role="button"], [aria-haspopup], .text-xs, [data-testid="model-selector-dropdown"]'
+        'translator_polish': {
+            name: 'Translate & Polish',
+            nodes: [
+                { id: 1, x: 50, y: 100, title: '🌐 Translator', context: 'Translate the following text into English:' },
+                { id: 2, x: 400, y: 100, title: '✨ Polisher', context: 'Improve the grammar and tone of the translation to be more professional:' }
+            ],
+            connections: [{ from: 1, to: 2 }]
         },
-        'grok': {
-            msgSelector: '.message-bubble',
-            inputSelector: 'textarea, div[contenteditable="true"]',
-            ignore: 'svg, span[role="button"], .action-buttons'
+        'code_review': {
+            name: 'Code Reviewer',
+            nodes: [
+                { id: 1, x: 50, y: 50, title: '🐞 Bug Finder', context: 'Find potential bugs in this code:' },
+                { id: 2, x: 50, y: 350, title: '⚡ Optimizer', context: 'Suggest performance improvements for this code:' },
+                { id: 3, x: 400, y: 200, title: '📝 Documenter', context: 'Write documentation and comments for the code:' }
+            ],
+            connections: [{ from: 1, to: 3 }, { from: 2, to: 3 }]
         }
     };
 
-    const MODEL_PRESETS = {
-        'openai': [
-            'gpt-4o-mini', 'gpt-3.5-turbo', 'gpt-4.1-mini',
-            'gpt-4o', 'o1', 'gpt-4.1'
-        ],
+    function simpleMarkdownParser(text) {
+        if (!text) return '';
 
-        'claude': [
-            'claude-3-haiku', 'claude-3-sonnet', 'claude-3.5-haiku',
-            'claude-3.5-sonnet', 'claude-3-opus', 'claude-3.5-opus'
-        ],
-
-        'gemini': [
-            'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro',
-            'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-pro',
-        ],
-
-        'grok': [
-            'grok-2-mini', 'grok-2', 'grok-3-mini',
-            'grok-3', 'grok-4', 'grok-4-fast'
-        ],
-
-        'local': ['llama3', 'mistral', 'gemma']
-    };
-
-    const LANG_DATA = {
-        'zh': {
-            title: 'Context-Carry',
-            status_ready: '準備就緒',
-            status_scanning: '正在掃描...',
-            label_prefix: '自訂前綴提示詞 (Title):',
-            placeholder: '在此輸入要給 AI 的前導指令...',
-            btn_scan: '重新掃描頁面',
-            btn_scan_done: '已重新掃描',
-            btn_select_all: '全選所有訊息',
-            btn_unselect_all: '取消全選',
-            btn_dl: '輸出為 .txt',
-            btn_copy: '複製到剪貼簿',
-            label_transfer: '轉移並開啟 (Cross-LLM):',
-            msg_detected: '偵測到 {n} 則訊息',
-            msg_selected: '已選取: {n} 則',
-            alert_no_selection: '請先選取對話或加入採集籃！',
-            alert_copy_done: '內容已複製！',
-            alert_fail: '操作失敗，請檢查權限',
-            btn_add_title: '加入此段落 (Shift 可連選)',
-            toast_autofill: 'Context-Carry: 已自動填入內容 ✨',
-            default_prompt: `[SYSTEM: CONTEXT TRANSFER]\n以下是使用者篩選的對話歷史，請以此為背景繼續對話：`,
-            label_basket: '🧺 跨視窗採集籃 (Basket):',
-            btn_add_basket: '加入 (+)',
-            btn_clear_basket: '清空',
-            btn_paste_basket: '填入此視窗',
-            basket_status: '目前有 {n} 筆資料 (點擊預覽 ▼)',
-            basket_status_empty: '採集籃是空的',
-            toast_basket_add: '已加入採集籃 🧺',
-            toast_basket_clear: '採集籃已清空 🗑️',
-            preview_del_tooltip: '刪除此筆資料',
-            preview_drag_hint: '可拖曳排序 ⇅ (懸停可看詳情)',
-            token_est: '📊 預估 Token:',
-            token_warn_title: '⚠️ Token 數量警告',
-            token_warn_msg: '預估內容 ({est}) 超過了 {platform} 的建議限制 ({limit})。\n\n強行轉移可能會導致記憶遺失。\n是否仍要繼續？',
-            btn_paint: '🖌️ 圈選',
-            paint_tooltip: '圈選畫面區域文字',
-            toast_enter_paint: '進入圈選模式 (按 ESC 退出)',
-            paint_no_text: '未選取到任何文字',
-            preview_title: '📝 <b>確認擷取內容 (Preview)</b>',
-            preview_words: '字數',
-            preview_cancel: '取消',
-            preview_confirm: '加入採集籃',
-            source_area_select: ' (圈選)',
-            alert_llm_only: '自動填入功能 (Auto-fill) 僅支援(ChatGPT, Claude, Gemini, Grok)',
-            btn_summary: 'AI 總結',
-            btn_new_doc: '建立筆記',
-            enter_new_doc: '請輸入內容：',
-            ai_settings_title: 'AI 設定',
-            ai_settings_endpoint: 'API 網址 (Endpoint)',
-            ai_settings_api_key: 'API 金鑰 (Key)',
-            ai_settings_save: '儲存設定',
-            ai_unconfigured: '尚未設定 AI，請先進行設定。',
-            ai_response_title: 'AI 回應',
-            ai_response_tab_response: '回應',
-            ai_response_tab_context: '上下文',
-            ai_summary_sending: 'AI 正在總結中...',
-            ai_summary_error: 'AI 請求失敗',
-            drawer_toggle: '進階選項 & 採集籃',
-            ai_setting_tab: 'AI 設定',
-            ai_response_tab: 'AI 回應',
-            ai_config_title: 'AI 設定',
-            ai_provider: '模型供應商 (Provider)',
-            ai_api_key: 'API 金鑰 (Key)',
-            ai_model: '模型名稱 (Model)',
-            ai_endpoint_toggle: 'API 網址 (Endpoint)',
-            ai_save: '儲存設定',
-            ai_modal_title: 'AI 回應',
-            ai_modal_processing: 'AI 思考中...',
-            ai_modal_done: '✅ 完成',
-            ai_tab_res: 'AI 回應',
-            ai_tab_ctx: '發送內容 (編輯)',
-            btn_resend: '🔄 更新內容並重試',
-            btn_save_file: '⬇️ 存為檔案',
-            btn_paste: '📋 填入目前視窗',
-            btn_send_all: '🚀 轉發全部',
-            btn_copy_res: '複製',
-            btn_clear_res: '清空',
-            btn_min_restore: '還原視窗',
-            btn_lang_title: '切換語言',
-            btn_theme_title: '切換深色模式',
-            btn_close_title: '關閉面板',
-            hint_shortcut_lang: ' (Alt+L)',
-            hint_shortcut_paint: ' (Alt+C)',
-            hint_shortcut_toggle: ' (Alt+M)',
-            btn_switch_ui: '切換介面風格',
-            hatch_expand: '▼ 展開貨艙',
-            hatch_retract: '▲ 收起貨艙',
-            btn_quick_settings: '⚙️ AI 設定'
-        },
-        'en': {
-            title: 'Context-Carry',
-            status_ready: 'Ready',
-            status_scanning: 'Scanning...',
-            label_prefix: 'Custom Prefix (System Prompt):',
-            placeholder: 'Enter instructions for the AI here...',
-            btn_scan: 'Rescan Page',
-            btn_select_all: 'Select All',
-            btn_unselect_all: 'Unselect All',
-            btn_scan_done: 'Scanned',
-            btn_dl: 'Export to .txt',
-            btn_copy: 'Copy to Clipboard',
-            label_transfer: 'Transfer to (Cross-LLM):',
-            msg_detected: 'Detected {n} messages',
-            msg_selected: 'Selected: {n}',
-            alert_no_selection: 'Please select messages or add to basket first!',
-            alert_copy_done: 'Content copied!',
-            alert_fail: 'Operation failed. Check permissions.',
-            btn_add_title: 'Add this block (Shift for range)',
-            toast_autofill: 'Context-Carry: Content Auto-filled ✨',
-            default_prompt: `[SYSTEM: CONTEXT TRANSFER]\nThe following is the conversation history selected by the user. Please use this as context to continue the conversation:`,
-            label_basket: '🧺 Context Basket:',
-            btn_add_basket: 'Add (+)',
-            btn_clear_basket: 'Clear',
-            btn_paste_basket: 'Paste Here',
-            basket_status: '{n} items in basket (Click to View ▼)',
-            basket_status_empty: 'Basket is empty',
-            toast_basket_add: 'Added to Basket 🧺',
-            toast_basket_clear: 'Basket Cleared 🗑️',
-            preview_del_tooltip: 'Remove item',
-            preview_drag_hint: 'Drag to reorder ⇅ (Hover for details)',
-            token_est: '📊 Est. Tokens:',
-            token_warn_title: '⚠️ Token Limit Warning',
-            token_warn_msg: 'Content ({est}) exceeds recommended limit for {platform} ({limit}).\n\nTransferring may cause memory loss.\nDo you want to proceed?',
-            btn_paint: '🖌️ Select',
-            paint_tooltip: 'Select area of text',
-            toast_enter_paint: 'Entered selection mode (Press ESC to exit)',
-            paint_no_text: 'No text selected',
-            preview_title: '📝 <b>Confirm selection (Preview)</b>',
-            preview_words: 'Chars',
-            preview_cancel: 'Cancel',
-            preview_confirm: 'Add to Basket',
-            source_area_select: ' (Area Select)',
-            alert_llm_only: 'Auto-fill is only available on supported(ChatGPT, Claude, Gemini, Grok)',
-            btn_summary: 'AI Summary',
-            btn_new_doc: 'New Doc',
-            enter_new_doc: 'Enter content',
-            ai_settings_title: 'AI Settings',
-            ai_settings_endpoint: 'API Endpoint',
-            ai_settings_api_key: 'API Key',
-            ai_settings_save: 'Save Settings',
-            ai_unconfigured: 'AI is not configured yet. Please set it up.',
-            ai_response_title: 'AI Response',
-            ai_response_tab_response: 'Response',
-            ai_response_tab_context: 'Context',
-            ai_summary_sending: 'Summarizing...',
-            ai_summary_error: 'Summarization failed',
-            drawer_toggle: 'Advanced & Basket',
-            ai_setting_tab: 'AI Settings',
-            ai_response_tab: 'AI Response',
-            ai_config_title: 'AI Configuration',
-            ai_provider: 'Provider',
-            ai_api_key: 'API Key',
-            ai_model: 'Model Name',
-            ai_endpoint_toggle: 'Advanced Endpoint',
-            ai_save: 'Save Settings',
-            ai_modal_title: 'AI Response',
-            ai_modal_processing: 'AI Processing...',
-            ai_modal_done: '✅ AI Done',
-            ai_tab_res: 'Response',
-            ai_tab_ctx: 'Sent Context (Edit)',
-            btn_resend: '🔄 Re-send with edited context',
-            btn_save_file: '⬇️ Save',
-            btn_paste: '📋 Paste to Window',
-            btn_send_all: '🚀 Send All',
-            btn_copy_res: 'Copy',
-            btn_clear_res: 'Clear',
-            btn_min_restore: 'Restore',
-            btn_lang_title: 'Switch Language',
-            btn_theme_title: 'Toggle Dark Mode',
-            btn_close_title: 'Close Panel',
-            hint_shortcut_lang: ' (Alt+L)',
-            hint_shortcut_paint: ' (Alt+C)',
-            hint_shortcut_toggle: ' (Alt+M)',
-            btn_switch_ui: 'Switch UI Style',
-            hatch_expand: '▼ DEPLOY BASKET',
-            hatch_retract: '▲ RETRACT BASKET',
-            btn_quick_settings: '⚙️ AI Settings'
-        }
-    };
+        let safeText = escapeHTML(text);
+        let html = safeText
+            .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+            .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+            .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+            .replace(/\*\*(.*)\*\*/gim, '<b>$1</b>')
+            .replace(/\*(.*)\*/gim, '<i>$1</i>')
+            .replace(/```([\s\S]*?)```/gim, '<pre><code>$1</code></pre>')
+            .replace(/`([^`]+)`/gim, '<code>$1</code>')
+            .replace(/^\- (.*$)/gim, '<li>$1</li>')
+            .replace(/\n/gim, '<br>');
+        return html;
+    }
 
     function injectStyles() {
+        if (typeof CC_STYLES === 'undefined') {
+            console.error('Context-Carry: CSS assets (CC_STYLES) not loaded.');
+            return;
+        }
+
         if (document.getElementById('cc-styles')) return;
+
         try {
             const style = document.createElement('style');
             style.id = 'cc-styles';
-            style.appendChild(document.createTextNode(`
-                #cc-panel {
-                    transform: translateX(30px);
-                    opacity: 0;
-                    transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.3s ease;
-                    position: fixed;
-                    top: 80px;
-                    right: 20px;
-                    z-index: 2147483647;
-                }
-                #cc-panel.cc-visible {
-                    transform: translateX(0);
-                    opacity: 1;
-                }
-                #cc-panel {
-                    --cc-bg: #ffffff;
-                    --cc-text: #334155;
-                    --cc-text-sub: #64748b;
-                    --cc-border: #e2e8f0;
-                    --cc-shadow: 0 10px 30px rgba(0,0,0,0.12);
-                    --cc-btn-bg: #f8fafc;
-                    --cc-btn-hover: #f1f5f9;
-                    --cc-primary: #3b82f6;
-                    --cc-drawer-bg: #f8fafc;
 
-                    --gpt-bg: #ecfdf5; --gpt-text: #059669; --gpt-border: #a7f3d0;
-                    --cld-bg: #fffbeb; --cld-text: #d97706; --cld-border: #fde68a;
-                    --gem-bg: #eff6ff; --gem-text: #2563eb; --gem-border: #bfdbfe;
-                    --grk-bg: #f3f4f6; --grk-text: #1f2937; --grk-border: #e5e7eb;
-                }
-                #cc-panel[data-theme="dark"] {
-                    --cc-bg: #1e1e1e;
-                    --cc-text: #e2e8f0;
-                    --cc-text-sub: #94a3b8;
-                    --cc-border: #333333;
-                    --cc-shadow: 0 10px 40px rgba(0,0,0,0.5);
-                    --cc-btn-bg: #2d2d2d;
-                    --cc-btn-hover: #3d3d3d;
-                    --cc-primary: #60a5fa;
-                    --cc-drawer-bg: #252525;
-                    --gpt-bg: rgba(16,185,129,0.15); --gpt-text: #34d399; --gpt-border: rgba(16,185,129,0.3);
-                    --cld-bg: rgba(245,158,11,0.15); --cld-text: #fbbf24; --cld-border: rgba(245,158,11,0.3);
-                    --gem-bg: rgba(59,130,246,0.15); --gem-text: #60a5fa; --gem-border: rgba(59,130,246,0.3);
-                    --grk-bg: rgba(255,255,255,0.1); --grk-text: #e5e7eb; --grk-border: rgba(255,255,255,0.2);
-                }
 
-                #cc-panel.cc-panel {
-                    width: 260px;
-                    min-height: 200px;
-                    background: var(--cc-bg);
-                    color: var(--cc-text);
-                    border: 1px solid var(--cc-border);
-                    border-radius: 16px;
-                    box-shadow: var(--cc-shadow);
-                    padding: 16px;
-                    font-size: 13px;
-                    display: flex;
-                    flex-direction: column;
-                }
+            style.textContent = CC_STYLES;
 
-                #cc-panel .cc-header {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    margin-bottom: 12px;
-                    padding-bottom: 8px;
-                    border-bottom: 1px solid var(--cc-border);
-                    cursor: move;
-                    user-select: none;
-                }
-                #cc-panel .cc-title {
-                    font-weight: 700;
-                    display: flex;
-                    align-items: center;
-                    gap: 6px;
-                }
-                #cc-panel .cc-status {
-                    font-size: 10px;
-                    background: var(--cc-primary);
-                    color: #fff;
-                    padding: 2px 6px;
-                    border-radius: 10px;
-                }
-                #cc-panel .cc-controls {
-                    display: flex;
-                    gap: 6px;
-                }
-                #cc-panel .cc-icon-btn {
-                    background: transparent;
-                    border: none;
-                    cursor: pointer;
-                    color: var(--cc-text-sub);
-                    font-size: 14px;
-                    padding: 2px;
-                    border-radius: 4px;
-                    transition: 0.2s;
-                }
-                #cc-panel .cc-icon-btn:hover {
-                    background: var(--cc-btn-hover);
-                    color: var(--cc-text);
-                }
-
-                #cc-panel .cc-msg {
-                    font-size: 11px;
-                    color: var(--cc-text-sub);
-                    margin-bottom: 8px;
-                }
-
-                #cc-panel .cc-grid {
-                    display: grid;
-                    grid-template-columns: 1fr 1fr;
-                    gap: 8px;
-                    margin-bottom: 12px;
-                }
-                #cc-panel .platform-btn {
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                    padding: 8px 12px;
-                    border-radius: 8px;
-                    cursor: pointer;
-                    transition: all 0.2s;
-                    border: 1px solid transparent;
-                    font-weight: 600;
-                    font-size: 12px;
-                }
-                #cc-panel .platform-btn:hover {
-                    transform: translateY(-1px);
-                    filter: brightness(1.05);
-                }
-                #cc-panel .platform-btn i {
-                    font-style: normal;
-                    font-size: 16px;
-                }
-                #cc-panel .p-chatgpt { background: var(--gpt-bg); color: var(--gpt-text); border-color: var(--gpt-border); }
-                #cc-panel .p-claude { background: var(--cld-bg); color: var(--cld-text); border-color: var(--cld-border); }
-                #cc-panel .p-gemini { background: var(--gem-bg); color: var(--gem-text); border-color: var(--gem-border); }
-                #cc-panel .p-grok { background: var(--grk-bg); color: var(--grk-text); border-color: var(--grk-border); }
-
-                #cc-panel .cc-tools {
-                    display: flex;
-                    gap: 6px;
-                    margin-bottom: 8px;
-                }
-                #cc-panel .tool-btn {
-                    flex: 1;
-                    padding: 6px;
-                    background: var(--cc-btn-bg);
-                    border: 1px solid var(--cc-border);
-                    color: var(--cc-text);
-                    border-radius: 6px;
-                    cursor: pointer;
-                    font-size: 11px;
-                    font-weight: 500;
-                    transition: 0.2s;
-                }
-                #cc-panel .tool-btn:hover {
-                    background: var(--cc-btn-hover);
-                    border-color: var(--cc-text-sub);
-                }
-
-                #cc-panel .cc-drawer-toggle {
-                    text-align: center;
-                    color: var(--cc-text-sub);
-                    font-size: 10px;
-                    cursor: pointer;
-                    padding: 4px;
-                    user-select: none;
-                    margin-top: 4px;
-                }
-                #cc-panel .cc-drawer-toggle:hover {
-                    color: var(--cc-text);
-                }
-
-                #cc-panel .cc-drawer {
-                    max-height: 0;
-                    overflow: hidden;
-                    opacity: 0;
-                    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-                    background: var(--cc-drawer-bg);
-                    margin: 0 -16px -16px -16px;
-                    border-radius: 0 0 16px 16px;
-                    border-top: 1px solid var(--cc-border);
-                }
-                #cc-panel.expanded .cc-drawer {
-                    max-height: 600px;
-                    opacity: 1;
-                    padding: 12px 16px;
-                    margin-top: 8px;
-                }
-                #cc-panel.expanded .arrow {
-                    transform: rotate(180deg);
-                    display: inline-block;
-                }
-
-                #cc-panel .cc-input {
-                    width: 100%;
-                    box-sizing: border-box;
-                    background: var(--cc-bg);
-                    color: var(--cc-text);
-                    border: 1px solid var(--cc-border);
-                    border-radius: 6px;
-                    font-size: 11px;
-                    margin-bottom: 8px;
-                    line-height: 1.4;
-                }
-                #cc-panel textarea.cc-input {
-                    padding: 8px;
-                    resize: vertical;
-                    height: 120px;
-                    min-height: 80px;
-                }
-
-                #cc-panel input.cc-input, 
-                #cc-panel select.cc-input {
-                    height: 36px !important;
-                    min-height: 36px !important;
-                    padding: 0 8px;
-                    display: flex;
-                    align-items: center;
-                }
-
-                #cc-panel .basket-info {
-                    display: flex;
-                    justify-content: space-between;
-                    font-size: 11px;
-                    color: var(--cc-text-sub);
-                    margin-bottom: 4px;
-                }
-                #cc-panel .basket-preview-list {
-                    margin-top: 4px;
-                    max-height: 150px;
-                    overflow-y: auto;
-                    font-size: 11px;
-                    color: var(--cc-text);
-                }
-                #cc-panel .empty-basket {
-                    font-size: 10px;
-                    color: var(--cc-text-sub);
-                    text-align: center;
-                    padding: 10px;
-                    border: 1px dashed var(--cc-border);
-                    border-radius: 6px;
-                }
-                #cc-panel .cc-basket-item {
-                    transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-                    opacity: 1;
-                    transform: translate3d(0,0,0);
-                    max-height: 60px;
-                    margin-bottom: 4px;
-                }
-                #cc-panel .cc-basket-item.cc-deleting {
-                    opacity: 0;
-                    transform: translateX(30px);
-                    max-height: 0;
-                    margin: 0 !important;
-                    padding: 0 !important;
-                    overflow: hidden;
-                }
-
-                .cc-ai-tab {
-                    position: absolute;
-                    left: -28px;
-                    top: 10px;
-                    width: 28px;
-                    height: 80px;
-                    background: var(--cc-bg);
-                    border: 1px solid var(--cc-border);
-                    border-right: 1px solid var(--cc-bg);
-                    border-radius: 8px 0 0 8px;
-                    cursor: pointer;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    box-shadow: -2px 2px 5px rgba(0,0,0,0.05);
-                    z-index: 0;
-                    transition: all 0.2s ease;
-                    color: var(--cc-text-sub);
-                    font-weight: bold;
-                    font-size: 12px;
-                    writing-mode: vertical-rl;
-                    text-orientation: mixed;
-                    user-select: none;
-                }
-                .cc-ai-tab:hover {
-                    left: -32px;
-                    width: 32px;
-                    color: var(--cc-primary);
-                }
-                .cc-ai-tab.active {
-                    opacity: 0;
-                    pointer-events: none;
-                    left: 0;
-                }
-
-                .cc-res-tab {
-                    position: absolute;
-                    left: -28px;
-                    top: 100px;
-                    width: 28px;
-                    height: 80px;
-                    background: var(--cc-bg);
-                    border: 1px solid var(--cc-border);
-                    border-right: 1px solid var(--cc-bg);
-                    border-radius: 8px 0 0 8px;
-                    cursor: pointer;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    box-shadow: -2px 2px 5px rgba(0,0,0,0.05);
-                    z-index: 0;
-                    transition: all 0.2s ease;
-                    color: var(--cc-text-sub);
-                    font-weight: bold;
-                    font-size: 12px;
-                    writing-mode: vertical-rl;
-                    text-orientation: mixed;
-                    user-select: none;
-                }
-                .cc-res-tab:hover {
-                    left: -32px;
-                    width: 32px;
-                    color: #4CAF50;
-                }
-                .cc-res-tab.active {
-                    opacity: 0;
-                    pointer-events: none;
-                    left: 0;
-                }
-
-                .cc-ai-drawer {
-                    position: absolute;
-                    top: 0;
-                    right: 100%; 
-                    width: 0;
-                    height: auto; 
-                    min-height: 250px; 
-                    
-                    border-radius: 12px;
-                    margin-right: 12px; 
-                    
-                    background: var(--cc-bg);
-                    border: 1px solid var(--cc-border);
-                    
-                    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-                    overflow: hidden;
-                    opacity: 0;
-                    z-index: -1;
-                    box-shadow: -5px 5px 20px rgba(0,0,0,0.15); 
-                    display: flex;
-                    flex-direction: column;
-                }
-                .cc-ai-drawer.open {
-                    width: 240px;
-                    opacity: 1;
-                    padding: 12px;
-                    margin-right: -1px; 
-                }
-                .cc-ai-drawer.open::after {
-                    content: '';
-                    position: absolute;
-                    top: 1px; bottom: 1px; right: -2px; width: 4px;
-                    background: var(--cc-bg);
-                    z-index: 10;
-                }
-                .cc-ai-content {
-                    min-width: 216px; 
-                    opacity: 0;
-                    transition: opacity 0.2s 0.1s;
-                    display: flex;
-                    flex-direction: column;
-                    height: 100%;
-                    flex: 1;
-                    overflow-y: auto;
-                    padding-bottom: 20px;
-                }
-                .cc-ai-drawer.open .cc-ai-content { opacity: 1; }
-                .cc-ai-dot {
-                    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-                    width: 6px; height: 6px; background: #ff5252; border-radius: 50%; display: none;
-                }
-                .cc-ai-dot.visible { display: block; }
-                .btn-ai-low {
-                    border: 1px dashed var(--cc-border) !important;
-                    opacity: 0.8;
-                    color: var(--cc-text-sub);
-                }
-                .btn-ai-high {
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-                    color: #fff !important;
-                    border: none !important;
-                    box-shadow: 0 4px 12px rgba(118, 75, 162, 0.5);
-                    font-weight: bold;
-                    text-shadow: 0 1px 2px rgba(0,0,0,0.2);
-                    animation: pulse-border 2s infinite;
-                }
-                @keyframes pulse-border {
-                    0% { box-shadow: 0 0 0 0 rgba(118, 75, 162, 0.7); }
-                    70% { box-shadow: 0 0 0 6px rgba(118, 75, 162, 0); }
-                    100% { box-shadow: 0 0 0 0 rgba(118, 75, 162, 0); }
-                }
-
-                .cc-modal-mask {
-                    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-                    background-color: rgba(0,0,0,0.7); z-index: 2147483650;
-                    display: flex; align-items: center; justify-content: center;
-                    backdrop-filter: blur(3px);
-                }
-                .cc-modal-card {
-                    background: rgba(20, 20, 25, 0.9);
-                    backdrop-filter: blur(10px);
-                    
-                    border: 1px solid var(--c-accent);
-                    box-shadow: 0 0 20px rgba(0, 210, 255, 0.15), inset 0 0 20px rgba(0, 0, 0, 0.8);
-                    color: var(--c-text);
-                    border-radius: 8px;
-                    box-sizing: border-box;
-                    overflow: hidden;
-                    
-                    clip-path: polygon(
-                        10px 0, 100% 0, 
-                        100% calc(100% - 10px), calc(100% - 10px) 100%, 
-                        0 100%, 0 10px
-                    );
-                    
-                    display: flex; flex-direction: column;
-                    width: 600px; max-width: 90%; min-height: 400px;
-                }
-
-                .cc-modal-header {
-                    background: rgba(0, 210, 255, 0.1);
-                    border-bottom: 1px solid var(--c-border);
-                    padding: 10px 15px;
-                    display: flex; justify-content: space-between; align-items: center;
-                    font-family: monospace; letter-spacing: 1px; color: var(--c-accent);
-                }
-
-                .cc-modal-content {
-                    background: transparent;
-                    font-family: 'Segoe UI', sans-serif;
-                    line-height: 1.6;
-                    padding: 20px;
-                    color: #e0e6ed;
-                    box-sizing: border-box;
-                    width: 100%;
-                }
-
-                .cc-modal-card::before {
-                    content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-                    background-image: linear-gradient(rgba(0, 210, 255, 0.03) 1px, transparent 1px),
-                    linear-gradient(90deg, rgba(0, 210, 255, 0.03) 1px, transparent 1px);
-                    background-size: 20px 20px;
-                    pointer-events: none; z-index: -1;
-                }
-                .cc-modal-tabs {
-                    display: flex; background: #252525; border-bottom: 1px solid #333;
-                }
-                .cc-modal-tab {
-                    flex: 1; padding: 10px; cursor: pointer; text-align: center;
-                    background: transparent; border: none; color: #888;
-                    border-bottom: 2px solid transparent; font-size: 12px; font-weight: 600;
-                }
-                .cc-modal-tab.active {
-                    color: #fff; background: rgba(255,255,255,0.05);
-                    border-bottom-color: #764ba2;
-                }
-                .cc-modal-footer {
-                    padding: 12px 16px; border-top: 1px solid #333;
-                    background: #252525; display: flex; justify-content: flex-end; gap: 8px;
-                    flex-wrap: wrap;
-                }
-
-                .cc-minimized {
-                    width: 200px !important; height: 40px !important;
-                    position: fixed !important; bottom: 20px !important; right: 20px !important;
-                    top: auto !important; left: auto !important;
-                    border-radius: 20px !important;
-                    cursor: pointer; overflow: hidden;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-                    z-index: 2147483651 !important;
-                    box-shadow: 0 5px 15px rgba(0,0,0,0.3) !important;
-                }
-                .cc-minimized .cc-modal-header { background: transparent; border: none; padding: 0 15px; height: 100%; }
-                .cc-minimized .cc-modal-tabs, .cc-minimized .cc-modal-content, .cc-minimized .cc-modal-footer { display: none !important; }
-                .cc-minimized .min-title { display: block !important; color: #fff; font-weight: bold; font-size: 12px; }
-                .cc-minimized .min-controls { display: none; }
-
-                #cc-panel ::-webkit-scrollbar { width: 6px; }
-                #cc-panel ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
-                #cc-panel ::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
-                #cc-panel ::-webkit-scrollbar-thumb:hover { background: #777; }
-
-                [data-cc-hover="true"]::after {
-                    content: '';
-                    position: absolute;
-                    top: 0; left: 0; right: 0; bottom: 0;
-                    border: 2px dashed rgba(76, 175, 80, 0.6);
-                    border-radius: inherit;
-                    pointer-events: none;
-                    z-index: 2000;
-                }
-
-                [data-cc-selected="true"]::after {
-                    content: '';
-                    position: absolute;
-                    top: 0; left: 0; right: 0; bottom: 0;
-                    border: 2px solid #4CAF50;
-                    background-color: rgba(76, 175, 80, 0.05);
-                    border-radius: inherit;
-                    pointer-events: none;
-                    z-index: 2000;
-                }
-
-                :root {
-                    --mech-bg: #1a1b1e;
-                    --mech-panel: #25262b;
-                    --mech-border: #444;
-                    --mech-accent: #00d2ff;
-                    --mech-accent-glow: rgba(0, 210, 255, 0.3);
-                    --mech-text: #e0e6ed;
-                    --mech-text-dim: #888;
-                    --mech-cable: #555;
-                }
-
-                .mech-container {
-                    position: fixed;
-                    top: 20px; right: 20px;
-                    width: 320px;
-                    z-index: 2147483647;
-                    font-family: 'Segoe UI', Roboto, sans-serif;
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center;
-                    filter: drop-shadow(0 20px 30px rgba(0,0,0,0.4));
-                    transition: opacity 0.3s;
-                    padding-top: 0;
-                }
-
-                .mech-container.cc-visible {
-                    display: flex;
-                    animation: hoverDrone 4s ease-in-out infinite;
-                }
-
-                .mech-container * {
-                    box-sizing: border-box;
-                    line-height: normal;
-                }
-
-                .mech-head {
-                    width: 240px;
-                    background: var(--mech-bg);
-                    border: 2px solid var(--mech-border);
-                    border-radius: 12px;
-                    padding: 12px;
-                    position: relative;
-                    z-index: 20;
-                    transition: border-color 0.3s, background 0.3s;
-                }
-
-                .winch-bay {
-                    position: absolute; bottom: -2px; left: 50%; transform: translateX(-50%);
-                    width: 60px; height: 4px; background: var(--mech-panel);
-                    border: 1px solid var(--mech-border); border-top: none;
-                    border-radius: 0 0 4px 4px; z-index: 5;
-                }
-
-                .visor {
-                    background: #000;
-                    border: 1px solid #333; border-radius: 4px;
-                    padding: 0 4px 0 10px; height: 36px;
-                    display: flex; justify-content: space-between; align-items: center;
-                    color: var(--mech-accent);
-                    font-family: monospace; font-size: 11px; letter-spacing: 1px;
-                    position: relative; overflow: hidden;
-                    cursor: move;
-                    margin-bottom: 10px;
-                }
-
-                .visor::after {
-                    content: ''; position: absolute; top:0; left:0; width:100%; height:100%;
-                    background: linear-gradient(90deg, transparent, var(--mech-accent-glow), transparent);
-                    transform: translateX(-100%); animation: scan 4s infinite linear; pointer-events: none;
-                }
-
-                .visor-status { display: flex; align-items: center; gap: 8px; z-index: 2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
-                .status-dot {
-                    width: 6px; height: 6px; background: var(--mech-accent);
-                    border-radius: 50%; box-shadow: 0 0 5px var(--mech-accent);
-                    animation: pulse 2s infinite;
-                }
-
-                .comms-btn {
-                    background: rgba(255,255,255,0.1); border: 1px solid #444; border-radius: 3px;
-                    color: #888; cursor: pointer; display: flex; align-items: center; gap: 6px;
-                    padding: 0 8px; height: 24px; font-family: monospace; font-size: 10px; transition: 0.2s;
-                    z-index: 10;
-                }
-                .comms-btn:hover { background: #222; color: #fff; border-color: #666; }
-
-                .input-deck { position: relative; }
-                .main-input {
-                    width: 100%; background: var(--mech-panel); border: 1px solid var(--mech-border);
-                    color: var(--mech-text); padding: 8px 30px 8px 8px; border-radius: 4px;
-                    font-size: 12px; height: 60px; resize: none; font-family: inherit; transition: 0.3s;
-                }
-                .main-input:focus { outline: none; border-color: var(--mech-accent); }
-
-                .ai-trigger-btn {
-                    position: absolute; right: 6px; bottom: 8px;
-                    background: var(--mech-accent); color: #000; border: none;
-                    width: 24px; height: 24px; border-radius: 4px;
-                    cursor: pointer; display: flex; align-items: center; justify-content: center;
-                    transition: 0.2s; font-weight: bold;
-                }
-                .ai-trigger-btn:hover { transform: scale(1.1); box-shadow: 0 0 10px var(--mech-accent); }
-
-                .hatch-trigger {
-                    width: 100%; text-align: center; color: var(--mech-text-dim); font-size: 9px;
-                    padding-top: 8px; cursor: pointer; user-select: none; letter-spacing: 0.5px;
-                    transition: color 0.2s;
-                }
-                .hatch-trigger:hover { color: var(--mech-accent); }
-
-                .suspension-system {
-                    position: relative; display: flex; flex-direction: column; align-items: center;
-                    width: 220px; z-index: 10; margin-top: -10px;
-                    transition: margin-top 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-                    pointer-events: none;
-                }
-                .mech-container.deployed .suspension-system { margin-top: 0; pointer-events: auto; }
-
-                .cable-line {
-                    width: 6px; height: 0px;
-                    background: repeating-linear-gradient(45deg, var(--mech-cable), var(--mech-cable) 4px, var(--mech-border) 4px, var(--mech-border) 8px);
-                    border-left: 1px solid #111; border-right: 1px solid #111;
-                    transition: height 0.4s cubic-bezier(0.4, 0, 0.2, 1); position: relative;
-                }
-                .mech-container.deployed .cable-line { height: 50px; }
-
-                .connector-joint {
-                    width: 24px; height: 8px; background: var(--mech-border);
-                    border-radius: 2px; position: absolute; bottom: -4px; left: 50%; transform: translateX(-50%);
-                    opacity: 0; transition: opacity 0.2s; z-index: 5;
-                }
-                .mech-container.deployed .connector-joint { opacity: 1; }
-
-                .mech-basket {
-                    width: 100%; background: var(--mech-bg);
-                    border: 2px solid var(--mech-border); border-top: 4px solid var(--mech-accent);
-                    border-radius: 4px 4px 8px 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);
-                    height: 0; opacity: 0; overflow: hidden; transform: scale(0.95);
-                    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); position: relative;
-                }
-                .mech-container.deployed .mech-basket {
-                    height: auto;
-                    min-height: 200px;
-                    opacity: 1;
-                    transform: scale(1);
-                    padding-bottom: 10px;
-                }
-                .cargo-content {
-                    padding: 15px;
-                    display: flex;
-                    flex-direction: column;
-                    height: 100%;
-                }
-
-                .basket-hook {
-                    position: absolute; top: -6px; left: 50%; transform: translateX(-50%);
-                    width: 12px; height: 6px; background: var(--mech-accent); border-radius: 4px;
-                }
-                .cargo-content { padding: 15px; }
-
-                .basket-tools { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 8px; }
-                .tiny-btn { font-size: 10px; color: var(--mech-text-dim); cursor: pointer; background: none; border: none; padding: 0; }
-                .tiny-btn:hover { color: var(--mech-accent); text-decoration: underline; }
-
-                /* Reuse existing basket item style logic but override colors */
-                .mech-basket .cc-basket-item {
-                    background: rgba(0,0,0,0.3) !important;
-                    border-left: 2px solid var(--mech-text-dim) !important;
-                    color: var(--mech-text) !important;
-                    margin-bottom: 6px;
-                }
-
-                .thruster-pack {
-                    display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
-                    margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--mech-border);
-                }
-                .thruster-btn {
-                    background: var(--mech-panel); border: 1px solid var(--mech-border);
-                    color: var(--mech-text); padding: 8px; border-radius: 4px;
-                    cursor: pointer; font-size: 11px; font-weight: bold;
-                    display: flex; align-items: center; justify-content: center; gap: 6px; transition: 0.2s;
-                }
-                .thruster-btn:hover { background: var(--mech-accent-glow); border-color: var(--mech-accent); color: #fff; }
-
-                body[data-theme="light"] {
-                    --mech-bg: #e0e5ec;
-                    --mech-panel: #f0f2f5;
-                    --mech-border: #b0b8c4;
-                    --mech-accent: #f97316;
-                    --mech-accent-glow: rgba(249, 115, 22, 0.3);
-                    --mech-text: #334155;
-                    --mech-text-dim: #64748b;
-                    --mech-cable: #94a3b8;
-                }
-
-                .antenna-group {
-                    position: absolute; 
-                    top: 0px;
-                    left: 45%; 
-                    transform: translateX(-50%);
-                    z-index: 5; 
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center; 
-                    cursor: pointer;
-                    width: 40px;
-                    opacity: 0;
-                    transition: top 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.3s;
-                    transition-delay: 0.3s;
-                    pointer-events: none;
-                }
-
-                .mech-container:hover .antenna-group,
-                .mech-container.deployed .antenna-group { 
-                    top: -38px;
-                    opacity: 1;
-                    
-                    transition-delay: 0s;
-                    pointer-events: auto;
-                }
-
-                .antenna-group:hover .antenna-tip {
-                    box-shadow: 0 0 15px var(--mech-accent);
-                    background: #fff;
-                }
-                
-                .antenna-tip {
-                    width: 8px; height: 8px; background: var(--mech-accent); border-radius: 50%;
-                    box-shadow: 0 0 10px var(--mech-accent); 
-                    transition: all 0.2s;
-                    margin-bottom: -1px;
-                }
-                .antenna-rod { width: 2px; height: 25px; background: var(--mech-border); }
-                .antenna-base {
-                    width: 30px; 
-                    height: 12px; 
-                    background: var(--mech-panel);
-                    border-radius: 4px 4px 0 0; 
-                    border: 1px solid var(--mech-border); 
-                    border-bottom: none;
-                    box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); 
-                }
-
-                .shoulder-pad {
-                    position: absolute; top: 45px; width: 40px;
-                    display: flex; flex-direction: column; gap: 6px; z-index: 15;
-                }
-                .shoulder-left { left: 0; align-items: flex-end; }
-                .shoulder-right { right: 0; align-items: flex-start; }
-
-                .mech-btn {
-                    width: 36px; height: 36px; background: var(--mech-panel);
-                    border: 1px solid var(--mech-border); color: var(--mech-text-dim);
-                    border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center;
-                    font-size: 14px; transition: 0.2s; position: relative;
-                }
-                .mech-btn:hover {
-                    background: var(--mech-bg); color: var(--mech-text); border-color: var(--mech-accent);
-                    box-shadow: 0 0 8px var(--mech-accent-glow); transform: scale(1.1); z-index: 10;
-                }
-                .mech-head-controls {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    margin-bottom: 8px;
-                    padding-bottom: 6px;
-                    border-bottom: 1px dashed #333;
-                    width: 100%;
-                }
-                #mech-basket-list {
-                    display: block !important;
-                    flex: 1;
-                    min-height: 50px;
-                    max-height: 300px;
-                    overflow-y: auto;
-                    margin-top: 8px;
-                    padding: 8px;
-                    background: rgba(0, 0, 0, 0.4) !important;
-                    border: 1px solid rgba(255, 255, 255, 0.1);
-                    border-radius: 4px;
-                    box-sizing: border-box;
-                }
-                #mech-basket-list .cc-basket-item {
-                    background: #2c2e33 !important;
-                    border: 1px solid #444 !important;
-                    border-left: 3px solid var(--mech-accent) !important;
-                    color: #e0e6ed !important;
-                    margin-bottom: 6px !important;
-                    padding: 8px 10px !important;
-                    opacity: 1 !important;
-                    transform: none !important;
-                    display: flex !important;
-                    align-items: center !important;
-                    justify-content: space-between !important;
-                    min-height: auto !important;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
-                }
-                #mech-basket-list .cc-basket-item:hover {
-                    background: #303136 !important;
-                    border-color: var(--mech-accent) !important;
-                    box-shadow: 0 0 8px var(--mech-accent-glow) !important;
-                }
-                .mech-container .shoulder-pad,
-                .mech-container .antenna-group {
-                    transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-                    opacity: 1;
-                    transform: scale(1);
-                }
-                
-                .mech-container.mech-retracting .shoulder-pad.shoulder-left {
-                    transform: translateX(20px) scale(0.5);
-                    opacity: 0;
-                }
-                .mech-container.mech-retracting .shoulder-pad.shoulder-right {
-                    transform: translateX(-20px) scale(0.5);
-                    opacity: 0;
-                }
-                .mech-container.mech-retracting .antenna-group {
-                    transform: translateY(20px) scale(0.5) translateX(-50%);
-                    opacity: 0;
-                }
-
-                .mech-container.mech-departing {
-                    animation: mechDepart 2.5s forwards cubic-bezier(0.6, -0.28, 0.735, 0.045);
-                    pointer-events: none;
-                }
-                
-                @keyframes mechDepart {
-                    0% {
-                        transform: translate(0, 0) rotate(0deg);
-                        opacity: 1;
-                        filter: brightness(1);
-                    }
-                    15% {
-                        transform: translate(40px, -10px) rotate(-5deg);
-                        opacity: 1;
-                    }
-                    100% {
-                        transform: translate(150vw, -20px) rotate(10deg) scale(0.6);
-                        opacity: 0;
-                        filter: brightness(1.5);
-                    }
-                }
-
-                #mech-basket-list div[style*="font-size: 10px"] { 
-                    color: var(--mech-text-dim) !important; 
-                    text-align: right; 
-                    margin-bottom: 4px;
-                }
-
-                .mech-container.mech-shutdown {
-                    animation: mechShutdown 1.5s forwards cubic-bezier(0.68, -0.55, 0.27, 1.55);
-                    pointer-events: none;
-                }
-                @keyframes mechShutdown {
-                    0% {
-                        transform: scale(1) translate(0, 0);
-                        opacity: 1;
-                        filter: brightness(1);
-                    }
-                    20% {
-                        transform: scale(0.95) translate(0, 10px);
-                    }
-                    40% {
-                        transform: scale(0.8) translate(-20px, -10px) rotate(-5deg);
-                        opacity: 1;
-                    }
-                    100% {
-                        transform: scale(0.1) translate(120vw, -80vh) rotate(15deg);
-                        opacity: 0;
-                        filter: brightness(2);
-                    }
-                }
-
-                .mech-config-overlay {
-                    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-                    background: rgba(0, 0, 0, 0.6);
-                    backdrop-filter: blur(4px);
-                    z-index: 2147483660;
-                    display: flex; align-items: center; justify-content: center;
-                    opacity: 0; animation: fadeIn 0.3s forwards;
-                }
-
-                .mech-config-card {
-                    width: 400px;
-                    background: #1a1b1e;
-                    border: 2px solid var(--mech-border);
-                    border-top: 4px solid var(--mech-accent);
-                    box-shadow: 0 0 30px rgba(0, 210, 255, 0.15);
-                    color: var(--mech-text);
-                    font-family: 'Segoe UI', monospace;
-                    position: relative;
-                    padding: 20px;
-                    clip-path: polygon(
-                        0 0, 100% 0, 
-                        100% calc(100% - 20px), calc(100% - 20px) 100%, 
-                        0 100%
-                    );
-                    transform: scale(0.9); animation: mechPopOpen 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-                }
-                @keyframes fadeIn { to { opacity: 1; } }
-                @keyframes mechPopOpen { to { transform: scale(1); } }
-
-                .mech-config-header {
-                    font-size: 16px; font-weight: bold; color: var(--mech-accent);
-                    text-transform: uppercase; letter-spacing: 2px;
-                    border-bottom: 1px dashed var(--mech-border);
-                    padding-bottom: 10px; margin-bottom: 20px;
-                    display: flex; justify-content: space-between; align-items: center;
-                }
-
-                .mech-field { margin-bottom: 15px; }
-                .mech-label {
-                    display: block; font-size: 10px; color: var(--mech-text-dim);
-                    margin-bottom: 5px; letter-spacing: 1px;
-                }
-                .mech-input, .mech-select {
-                    width: 100%; background: #000;
-                    border: 1px solid var(--mech-border); color: #fff;
-                    padding: 8px 10px; font-family: monospace; font-size: 12px;
-                    transition: 0.3s; box-sizing: border-box;
-                }
-                .mech-input:focus, .mech-select:focus {
-                    border-color: var(--mech-accent);
-                    box-shadow: 0 0 10px var(--mech-accent-glow);
-                    outline: none;
-                }
-
-                .mech-btn-group { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
-                .mech-action-btn {
-                    background: transparent; border: 1px solid var(--mech-accent);
-                    color: var(--mech-accent); padding: 8px 16px;
-                    cursor: pointer; font-family: monospace; font-weight: bold;
-                    text-transform: uppercase; transition: 0.2s;
-                }
-                .mech-action-btn:hover {
-                    background: var(--mech-accent); color: #000;
-                    box-shadow: 0 0 15px var(--mech-accent-glow);
-                }
-                .mech-cancel-btn {
-                    background: transparent; border: 1px solid #555; color: #888;
-                    padding: 8px 16px; cursor: pointer; font-family: monospace;
-                }
-                .mech-cancel-btn:hover { border-color: #888; color: #ccc; }
-
-                .mech-deco-line {
-                    position: absolute; bottom: 5px; right: 25px;
-                    width: 30px; height: 2px; background: var(--mech-accent);
-                    opacity: 0.5;
-                }
-
-                .power-group {
-                    display: flex;
-                    gap: 6px;
-                }
-
-                .power-btn {
-                    width: 32px; height: 18px;
-                    background: #000;
-                    border: 1px solid #444;
-                    border-radius: 2px;
-                    cursor: pointer;
-                    position: relative;
-                    transition: all 0.2s;
-                }
-                .power-btn::after {
-                    content: ''; position: absolute; top: 2px; left: 2px; bottom: 2px; width: 10px;
-                    background: #555; transition: all 0.2s;
-                }
-                .power-btn:hover { border-color: #666; }
-                .power-btn.active { border-color: var(--mech-accent); box-shadow: 0 0 5px rgba(0, 210, 255, 0.2); }
-                .power-btn.active::after { left: 16px; background: var(--mech-accent); box-shadow: 0 0 5px var(--mech-accent); }
-
-                .mech-close-btn {
-                    width: 18px; height: 18px;
-                    background: #200;
-                    border: 1px solid #800;
-                    color: #f00;
-                    font-size: 10px;
-                    font-weight: bold;
-                    display: flex; align-items: center; justify-content: center;
-                    cursor: pointer;
-                    border-radius: 50%;
-                    transition: all 0.2s;
-                }
-                .mech-close-btn:hover { background: #f00; color: #fff; box-shadow: 0 0 8px #f00; }
-                .linkage { position: absolute; top: 12px; width: 12px; height: 6px; background: var(--mech-border); z-index: -1; }
-                .shoulder-left .linkage { right: -10px; }
-                .shoulder-right .linkage { left: -10px; }
-
-                @keyframes hoverDrone { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
-                @keyframes scan { 0% { left: -50%; } 100% { left: 150%; } }
-                @keyframes pulse { 0%, 100% { opacity: 0.6; transform: scale(1); } 50% { opacity: 1; transform: scale(1.3); } }
-
-            `));
             (document.head || document.documentElement).appendChild(style);
         } catch (e) {
             console.error("Context-Carry: Style injection failed:", e);
@@ -1288,13 +252,274 @@
     const host = window.location.hostname;
     let config = null;
 
+    const AI_QUEUE = {
+        queue: [],
+        activeCount: 0,
+        MAX_CONCURRENT: 3,
+
+        add: function (taskFn) {
+            return new Promise((resolve, reject) => {
+                this.queue.push({ taskFn, resolve, reject });
+                this.process();
+            });
+        },
+
+        process: async function () {
+            if (this.activeCount >= this.MAX_CONCURRENT || this.queue.length === 0) return;
+
+            const { taskFn, resolve, reject } = this.queue.shift();
+            this.activeCount++;
+
+            try {
+                const result = await taskFn();
+                resolve(result);
+            } catch (error) {
+                console.error("Queue Task Error:", error);
+                reject(error);
+            } finally {
+                this.activeCount--;
+                this.process();
+            }
+        }
+    };
+
     if (host.includes('chatgpt')) config = APP_CONFIG['chatgpt.com'];
     else if (host.includes('gemini.google.com')) config = APP_CONFIG['gemini.google.com'];
     else if (host.includes('claude')) config = APP_CONFIG['claude.ai'];
     else if (host.includes('x.com') || host.includes('grok.com')) config = APP_CONFIG['grok'];
+    state.config = config;
 
-    window.ccManager.config = config;
+    function getCustomPrompts(cb) {
+        chrome.storage.local.get(['cc_custom_sys_prompt', 'cc_custom_prompts'], (res) => {
+            let list = res.cc_custom_prompts || [];
+            if (!list.length && res.cc_custom_sys_prompt) {
+                list.push({
+                    id: Date.now(),
+                    name: 'Default Custom',
+                    text: res.cc_custom_sys_prompt
+                });
+                chrome.storage.local.remove('cc_custom_sys_prompt');
+                chrome.storage.local.set({ cc_custom_prompts: list });
+            }
+            cb(list);
+        });
+    }
 
+    function handleSavePromptClick() {
+        if (!prefixInput) return;
+        const currentText = prefixInput.value.trim();
+        if (!currentText) return;
+
+        const t = LANG_DATA[state.lang];
+
+        getCustomPrompts((list) => {
+            const existing = document.querySelector('.mech-config-overlay');
+            if (existing) existing.remove();
+
+            const overlay = document.createElement('div');
+            overlay.className = 'mech-config-overlay';
+            overlay.style.opacity = '1';
+
+            const card = document.createElement('div');
+            card.className = 'mech-config-card';
+            card.style.width = '350px';
+
+            card.innerHTML = `
+                <div class="mech-config-header">
+                    <span>💾 ${t.prompt_save_title}</span>
+                </div>
+                
+                <div class="mech-field">
+                    <span class="mech-label">NAME</span>
+                    <input type="text" id="prompt-name" class="mech-input" placeholder="${t.prompt_save_name_ph}">
+                </div>
+
+                <div class="mech-field">
+                    <span class="mech-label">EXISTING SLOTS (${list.length}/3)</span>
+                    <div id="prompt-list" style="
+                        background: var(--input-bg); 
+                        border: 1px solid var(--mech-border); 
+                        border-radius: 4px; 
+                        max-height: 150px; 
+                        overflow-y: auto; 
+                        display: flex; 
+                        flex-direction: column; 
+                        gap: 2px; 
+                        padding: 4px;">
+                        </div>
+                </div>
+
+                <div class="mech-btn-group">
+                    <button id="btn-cancel" class="mech-cancel-btn">${t.unlock_cancel || 'Cancel'}</button>
+                    <button id="btn-save" class="mech-action-btn">${t.prompt_save_btn_new}</button>
+                </div>
+            `;
+
+            overlay.appendChild(card);
+            document.body.appendChild(overlay);
+
+            const nameInput = card.querySelector('#prompt-name');
+            const listContainer = card.querySelector('#prompt-list');
+            const btnSave = card.querySelector('#btn-save');
+            const btnCancel = card.querySelector('#btn-cancel');
+
+            let selectedId = null;
+
+            const renderList = () => {
+                listContainer.innerHTML = '';
+                if (list.length === 0) {
+                    listContainer.innerHTML = `<div style="padding:10px; text-align:center; color:var(--text-dim); font-size:10px;">${t.prompt_load_empty}</div>`;
+                    return;
+                }
+
+                list.forEach(item => {
+                    const row = document.createElement('div');
+                    row.textContent = item.name;
+                    Object.assign(row.style, {
+                        padding: '8px 10px',
+                        border: '1px solid transparent',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                        color: 'var(--text)',
+                        transition: 'all 0.2s',
+                        background: 'rgba(255,255,255,0.02)'
+                    });
+
+                    if (selectedId === item.id) {
+                        row.style.borderColor = 'var(--accent)';
+                        row.style.background = 'var(--accent-glow)';
+                        row.style.color = 'var(--accent)';
+                        row.style.fontWeight = 'bold';
+                    }
+
+                    row.onmouseover = () => { if (selectedId !== item.id) row.style.background = 'var(--hover-bg)'; };
+                    row.onmouseout = () => { if (selectedId !== item.id) row.style.background = 'rgba(255,255,255,0.02)'; };
+
+                    row.onclick = () => {
+                        selectedId = item.id;
+                        nameInput.value = item.name;
+                        updateButtonState();
+                        renderList();
+                    };
+                    listContainer.appendChild(row);
+                });
+            };
+
+            const updateButtonState = () => {
+                if (selectedId) {
+                    btnSave.innerText = t.prompt_save_btn_overwrite;
+                    btnSave.style.borderColor = '#ff9800';
+                    btnSave.style.color = '#ff9800';
+                    btnSave.disabled = false;
+                    btnSave.style.opacity = '1';
+                } else {
+                    btnSave.style.borderColor = '';
+                    btnSave.style.color = '';
+                    if (list.length >= 3) {
+                        btnSave.innerText = t.prompt_save_limit;
+                        btnSave.disabled = true;
+                        btnSave.style.opacity = '0.5';
+                        btnSave.style.fontSize = '10px';
+                        nameInput.placeholder = "Select an item to overwrite";
+                    } else {
+                        btnSave.innerText = t.prompt_save_btn_new;
+                        btnSave.disabled = false;
+                        btnSave.style.opacity = '1';
+                        btnSave.style.fontSize = '';
+                    }
+                }
+            };
+
+            renderList();
+            updateButtonState();
+
+            btnCancel.onclick = () => overlay.remove();
+
+            btnSave.onclick = () => {
+                const name = nameInput.value.trim() || `Prompt ${list.length + 1}`;
+
+                if (selectedId) {
+                    const idx = list.findIndex(i => i.id === selectedId);
+                    if (idx !== -1) {
+                        list[idx].name = name;
+                        list[idx].text = currentText;
+                    }
+                } else {
+                    if (list.length >= 3) return;
+                    list.push({ id: Date.now(), name: name, text: currentText });
+                }
+
+                chrome.storage.local.set({ cc_custom_prompts: list }, () => {
+                    showToast(t.prompt_toast_saved);
+                    overlay.remove();
+                });
+            };
+
+            nameInput.focus();
+        });
+    }
+
+    function handleLoadPromptClick(btnElement) {
+        const t = LANG_DATA[state.lang];
+        getCustomPrompts((list) => {
+            if (list.length === 0) {
+                showToast(t.prompt_load_empty);
+                return;
+            }
+            const existing = document.getElementById('cc-prompt-menu');
+            if (existing) { existing.remove(); return; }
+
+            const menu = document.createElement('div');
+            menu.id = 'cc-prompt-menu';
+            const rect = btnElement.getBoundingClientRect();
+            const menuLeft = Math.max(0, rect.left - 100);
+
+            Object.assign(menu.style, {
+                position: 'fixed',
+                top: (rect.bottom + 5) + 'px',
+                left: menuLeft + 'px',
+                minWidth: '150px',
+                background: '#252525',
+                border: '1px solid #444',
+                borderRadius: '6px',
+                boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
+                zIndex: '2147483660',
+                display: 'flex', flexDirection: 'column',
+                overflow: 'hidden'
+            });
+
+            list.forEach(item => {
+                const menuItem = document.createElement('div');
+                menuItem.innerText = item.name;
+                Object.assign(menuItem.style, {
+                    padding: '8px 12px', cursor: 'pointer', color: '#e0e0e0', fontSize: '12px', borderBottom: '1px solid #333'
+                });
+                menuItem.onmouseover = () => { menuItem.style.background = '#2196F3'; menuItem.style.color = '#fff'; };
+                menuItem.onmouseout = () => { menuItem.style.background = 'transparent'; menuItem.style.color = '#e0e0e0'; };
+
+                menuItem.onclick = () => {
+                    if (prefixInput) {
+                        prefixInput.value = item.text;
+                        calculateTotalTokens();
+                        flashInput(prefixInput);
+                    }
+                    menu.remove();
+                };
+                menu.appendChild(menuItem);
+            });
+
+            document.body.appendChild(menu);
+
+            const closeMenu = (e) => {
+                if (!menu.contains(e.target) && e.target !== btnElement) {
+                    menu.remove();
+                    document.removeEventListener('click', closeMenu);
+                }
+            };
+            setTimeout(() => document.addEventListener('click', closeMenu), 0);
+        });
+    }
 
     function convertToMarkdown(element) {
         const clone = element.cloneNode(true);
@@ -1327,7 +552,12 @@
         });
         clone.querySelectorAll('li').forEach(li => li.replaceWith(document.createTextNode(`\n- ${li.innerText}`)));
         clone.querySelectorAll('br').forEach(br => br.replaceWith(document.createTextNode('\n')));
-        clone.querySelectorAll('p, div').forEach(p => p.append(document.createTextNode('\n')));
+        clone.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, pre, blockquote').forEach(el => {
+            const last = el.lastChild;
+            if (!last || last.nodeType !== Node.TEXT_NODE || !last.nodeValue.endsWith('\n')) {
+                el.append(document.createTextNode('\n'));
+            }
+        });
 
         return clone.innerText.trim();
     }
@@ -1354,7 +584,7 @@
 
             const display = document.getElementById('cc-token-display');
             if (display) {
-                const label = LANG_DATA[window.ccManager.lang].token_est;
+                const label = LANG_DATA[state.lang].token_est;
                 display.innerText = `${label} ${count.toLocaleString()}`;
 
                 display.style.color = count > 30000 ? '#ff9800' : '#aaa';
@@ -1362,82 +592,179 @@
         });
     }
 
-    /* =========================================
-       3. Main Functions: Open / Close / Toggle
-    ========================================= */
+    function switchPromptLanguage(oldLang, newLang) {
+        if (!prefixInput) return;
 
-    function openInterface() {
-        if (window.ccManager.active) return;
+        const currentText = prefixInput.value.trim();
+        const oldD = LANG_DATA[oldLang];
+        const newD = LANG_DATA[newLang];
 
-        try {
-            injectStyles();
-        } catch (e) {
-            console.error("Context-Carry: Critical error in injectStyles", e);
-        }
-        window.ccManager.active = true;
+        const promptMap = {
+            [oldD.default_prompt.trim()]: newD.default_prompt,
+            [oldD.sys_prompt_summary.trim()]: newD.sys_prompt_summary,
+            [oldD.sys_prompt_translate.trim()]: newD.sys_prompt_translate,
+            [oldD.sys_prompt_explain.trim()]: newD.sys_prompt_explain
+        };
 
-        try {
-            if (window.ccManager.uiMode === 'robot') {
-                createRobotPanel();
-            } else {
-                createPanel();
-            }
-        } catch (e) {
-            console.error("Panel creation failed", e);
-            window.ccManager.active = false;
-            return;
-        }
-        setTimeout(() => {
-            const panel = document.getElementById('cc-panel');
-            if (panel) panel.classList.add('cc-visible');
-        }, 10);
-
-        if (window.ccManager.config) {
-            performScan();
-            window.ccManager.interval = setInterval(performScan, 3000);
-        }
-        try {
-            checkAutoFill();
-            updateBasketUI();
-        } catch (e) {
-            console.error("Context-Carry: Error in post-panel logic", e);
+        if (promptMap[currentText]) {
+            prefixInput.value = promptMap[currentText];
+            flashInput(prefixInput);
         }
     }
 
-    function closeInterface() {
-        if (!window.ccManager.active) return;
-        window.ccManager.active = false;
+    /* =========================================
+       3. Main Functions: Open / Close / Toggle
+    ========================================= */
+    const originalOpenInterface = openInterface;
 
-        if (window.ccManager.interval) {
-            clearInterval(window.ccManager.interval);
-            window.ccManager.interval = null;
+    function openInterface() {
+        if (state.active) return;
+        state.active = true;
+
+        const host = window.location.hostname;
+        chrome.storage.local.get(['cc_disabled_domains'], (res) => {
+            let domains = res.cc_disabled_domains || [];
+            if (domains.includes(host)) {
+                domains = domains.filter(d => d !== host);
+                chrome.storage.local.set({ cc_disabled_domains: domains });
+            }
+        });
+
+        const drone = document.getElementById('cc-drone-fab');
+        if (drone) drone.classList.add('cc-hidden');
+
+
+        chrome.storage.local.get(['cc_feature_unlock', 'cc_theme'], (result) => {
+
+            state.isUnlocked = !!result.cc_feature_unlock;
+
+            if (result.cc_theme) {
+                state.theme = result.cc_theme;
+            }
+
+            if (typeof applyTheme === 'function') {
+                applyTheme(state.theme);
+            }
+
+            try {
+                injectStyles();
+            } catch (e) {
+                console.error("Context-Carry: Critical error in injectStyles", e);
+            }
+
+            try {
+                if (state.uiMode === 'robot') {
+                    createRobotPanel();
+                } else {
+                    createPanel();
+                }
+            } catch (e) {
+                console.error("Panel creation failed", e);
+                state.active = false;
+                return;
+            }
+
+            setTimeout(() => {
+                const panel = document.getElementById('cc-panel');
+                if (panel) panel.classList.add('cc-visible');
+            }, 10);
+
+            if (state.config) {
+                if (state.interval) {
+                    clearInterval(state.interval);
+                }
+                state.interval = setInterval(performScan, 3000);
+                performScan();
+            }
+
+            chrome.runtime.sendMessage({ action: "CLEAR_BADGE" });
+
+            try {
+                checkAutoFill();
+                updateBasketUI((basket) => {
+                    const panelEl = document.getElementById('cc-panel');
+                    if (state.uiMode === 'standard' && panelEl) {
+                        if (basket && basket.length > 0) {
+                            panelEl.classList.add('expanded');
+                            toggleBasketPreview(true);
+                        }
+                    }
+                });
+            } catch (e) {
+                console.error("Context-Carry: Error in post-panel logic", e);
+            }
+        });
+    }
+
+    function closeInterface() {
+        if (!state.active) return;
+        state.active = false;
+
+        const currentPanel = document.getElementById('cc-panel') || document.getElementById('cc-robot-panel');
+        let savedPos = null;
+
+        if (currentPanel) {
+            const rect = currentPanel.getBoundingClientRect();
+            savedPos = { top: rect.top, left: rect.left };
         }
 
-        const panel = document.getElementById('cc-panel') || document.getElementById('cc-robot-panel');
+        const spawnDrone = () => {
+            if (state.config) {
+                const afterSave = () => {
+                    const drone = document.getElementById('cc-drone-fab');
+                    if (drone) {
+                        drone.classList.remove('cc-hidden');
+                        if (savedPos) {
+                            drone.style.top = savedPos.top + 'px';
+                            drone.style.left = savedPos.left + 'px';
+                            drone.style.bottom = 'auto';
+                            drone.style.right = 'auto';
+                        }
+                        updateDroneUI();
+                    } else {
+                        createTransportDrone();
+                    }
+                };
 
-        if (panel) {
-            if (panel.id === 'cc-robot-panel') {
-                panel.classList.remove('deployed');
+                if (savedPos) {
+                    chrome.storage.local.set({ 'cc_drone_position': savedPos }, afterSave);
+                } else {
+                    afterSave();
+                }
+            }
+        };
+
+        if (state.interval) {
+            clearInterval(state.interval);
+            state.interval = null;
+        }
+
+        if (currentPanel) {
+            if (currentPanel.id === 'cc-robot-panel') {
+                currentPanel.classList.remove('deployed');
                 setTimeout(() => {
-                    panel.classList.add('mech-retracting');
+                    currentPanel.classList.add('mech-retracting');
                 }, 200);
 
                 setTimeout(() => {
-                    panel.classList.remove('cc-visible');
-                    panel.classList.add('mech-departing');
+                    currentPanel.classList.remove('cc-visible');
+                    currentPanel.classList.add('mech-departing');
                     setTimeout(() => {
-                        cleanupDOM(panel);
+                        cleanupDOM(currentPanel);
+                        spawnDrone();
                     }, 2000);
                 }, 800);
 
             } else {
-                panel.classList.remove('cc-visible');
+                currentPanel.classList.remove('cc-visible');
                 setTimeout(() => {
-                    cleanupDOM(panel);
+                    cleanupDOM(currentPanel);
+                    spawnDrone();
                 }, 300);
             }
         } else {
             cleanupDOM(null);
+            spawnDrone();
         }
     }
 
@@ -1451,38 +778,145 @@
         }
 
         document.querySelectorAll('.cc-btn').forEach(e => e.remove());
-        const processedElements = document.querySelectorAll('[data-cc-listening], [data-cc-selected], [data-cc-hover]');
-        processedElements.forEach(el => {
-            if (el._ccHandlers) {
-                el.removeEventListener('mouseenter', el._ccHandlers.onMouseEnter);
-                el.removeEventListener('mouseleave', el._ccHandlers.onMouseLeave);
-                el.removeEventListener('click', el._ccHandlers.onClick);
-                el.removeEventListener('dragstart', el._ccHandlers.onDragStart);
-                el.removeEventListener('dragend', el._ccHandlers.onDragEnd);
-                delete el._ccHandlers;
-            }
-            el.style.boxShadow = '';
-            el.style.outline = '';
-            el.style.backgroundColor = el.dataset.originalBg || '';
-            el.removeAttribute('draggable');
-            el.style.cursor = '';
-            delete el.dataset.ccListening;
-            delete el.dataset.ccSelected;
-            delete el.dataset.ccHover;
-            delete el.dataset.originalBg;
-        });
 
-        window.ccManager.lastCheckedIndex = null;
+        setTimeout(() => {
+            const processedElements = document.querySelectorAll('[data-cc-listening], [data-cc-selected], [data-cc-hover]');
+
+            if (processedElements.length > 50) {
+                let index = 0;
+                const chunkSize = 50;
+
+                const processChunk = () => {
+                    const end = Math.min(index + chunkSize, processedElements.length);
+                    for (let i = index; i < end; i++) {
+                        const el = processedElements[i];
+                        if (el._ccHandlers) {
+                            el.removeEventListener('mouseenter', el._ccHandlers.onMouseEnter);
+                            el.removeEventListener('mouseleave', el._ccHandlers.onMouseLeave);
+                            el.removeEventListener('click', el._ccHandlers.onClick);
+                            el.removeEventListener('dragstart', el._ccHandlers.onDragStart);
+                            el.removeEventListener('dragend', el._ccHandlers.onDragEnd);
+                            delete el._ccHandlers;
+                        }
+                        el.style.boxShadow = '';
+                        el.style.outline = '';
+                        el.style.backgroundColor = el.dataset.originalBg || '';
+                        el.removeAttribute('draggable');
+                        el.style.cursor = '';
+                        delete el.dataset.ccListening;
+                        delete el.dataset.ccSelected;
+                        delete el.dataset.ccHover;
+                        delete el.dataset.originalBg;
+                    }
+                    index = end;
+
+                    if (index < processedElements.length) {
+                        setTimeout(processChunk, 0);
+                    }
+                };
+                processChunk();
+            } else {
+                processedElements.forEach(el => {
+                    if (el._ccHandlers) {
+                        el.removeEventListener('mouseenter', el._ccHandlers.onMouseEnter);
+                        el.removeEventListener('mouseleave', el._ccHandlers.onMouseLeave);
+                        el.removeEventListener('click', el._ccHandlers.onClick);
+                        el.removeEventListener('dragstart', el._ccHandlers.onDragStart);
+                        el.removeEventListener('dragend', el._ccHandlers.onDragEnd);
+                        delete el._ccHandlers;
+                    }
+                    el.style.boxShadow = '';
+                    el.style.outline = '';
+                    el.style.backgroundColor = el.dataset.originalBg || '';
+                    el.removeAttribute('draggable');
+                    el.style.cursor = '';
+                    delete el.dataset.ccListening;
+                    delete el.dataset.ccSelected;
+                    delete el.dataset.ccHover;
+                    delete el.dataset.originalBg;
+                });
+            }
+
+            state.lastCheckedIndex = null;
+            document.querySelectorAll('[style*="box-shadow"], [style*="outline"], [style*="background-color"]').forEach(el => {
+                el.style.boxShadow = '';
+                el.style.outline = '';
+                el.style.backgroundColor = '';
+            });
+        }, 10);
+    }
+
+    function cleanUpSiteOverlays() {
+        const targetDomains = ['claude.ai', 'chatgpt.com', 'gemini.google.com'];
+        const host = window.location.hostname;
+
+        if (targetDomains.some(d => host.includes(d))) {
+            setTimeout(() => {
+                const dragLeave = new DragEvent('dragleave', {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window,
+                    clientX: 0,
+                    clientY: 0,
+                    relatedTarget: null
+                });
+
+                document.dispatchEvent(dragLeave);
+                document.body.dispatchEvent(dragLeave);
+
+                const gptOverlay = document.querySelector('div[class*="drag-overlay"]');
+                if (gptOverlay) gptOverlay.dispatchEvent(dragLeave);
+
+                if (host.includes('claude.ai')) {
+                    const inputArea = document.querySelector('[data-testid="chat-input"]') ||
+                        document.querySelector('fieldset');
+                    if (inputArea) {
+                        inputArea.dispatchEvent(dragLeave);
+                        if (inputArea.parentElement) inputArea.parentElement.dispatchEvent(dragLeave);
+                    }
+
+                    const potentialOverlays = document.querySelectorAll('.fixed.inset-0');
+                    potentialOverlays.forEach(el => {
+                        const style = window.getComputedStyle(el);
+                        if (parseInt(style.zIndex) > 10) {
+                            el.dispatchEvent(dragLeave);
+                        }
+                    });
+                }
+
+            }, 100);
+        }
     }
 
     function toggleInterface() {
-        if (window.ccManager.active) {
+        if (state.active) {
             closeInterface();
-        } else {
-            openInterface();
+            return;
         }
+
+        const host = window.location.hostname;
+        chrome.storage.local.get(['cc_disabled_domains'], (res) => {
+            let domains = res.cc_disabled_domains || [];
+
+            if (domains.includes(host)) {
+                domains = domains.filter(d => d !== host);
+                chrome.storage.local.set({ cc_disabled_domains: domains }, () => {
+                    state.droneDismissed = false;
+                    if (!document.getElementById('cc-drone-fab')) {
+                        createTransportDrone();
+                    }
+
+                    showToast("Drone summoned! 🚁");
+                });
+            }
+            else if (!document.getElementById('cc-drone-fab') && state.config) {
+                createTransportDrone();
+            }
+            else {
+                openInterface();
+            }
+        });
     }
-    window.ccManager.toggleFn = toggleInterface;
 
     /* =========================================
        4. UI Construction
@@ -1492,9 +926,94 @@
     let tooltip;
     let btnSummary, btnNewDoc;
 
+    function createSysBtn(id, textKey, tooltipKey, promptKey, isCustom = false) {
+        const t = LANG_DATA[state.lang];
+        const btn = document.createElement('button');
+        btn.id = id;
+        btn.className = 'cc-sys-btn';
+        btn.textContent = t[textKey] || textKey;
+        btn.title = t[tooltipKey] || tooltipKey;
+
+        Object.assign(btn.style, {
+            background: 'transparent',
+            border: '1px solid transparent',
+            cursor: 'pointer',
+            fontSize: '12px',
+            padding: '1px 4px',
+            borderRadius: '4px',
+            transition: 'all 0.1s',
+            opacity: '0.7'
+        });
+
+        btn.onmouseover = () => { btn.style.opacity = '1'; btn.style.background = 'rgba(128,128,128,0.2)'; };
+        btn.onmouseout = () => { btn.style.opacity = '0.7'; btn.style.background = 'transparent'; };
+
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            if (prefixInput) flashInput(prefixInput);
+
+            if (promptKey) {
+                const curT = LANG_DATA[state.lang];
+                if (prefixInput) {
+                    prefixInput.value = curT[promptKey];
+                    calculateTotalTokens();
+                }
+            }
+        };
+        return btn;
+    }
+
+    if (!state.theme) state.theme = 'dark';
+
+    function applyTheme(newTheme) {
+        state.theme = newTheme;
+        chrome.storage.local.set({ 'cc_theme': newTheme });
+
+        if (newTheme === 'light') {
+            document.body.setAttribute('data-theme', 'light');
+        } else {
+            document.body.removeAttribute('data-theme');
+        }
+
+        const stdPanel = document.getElementById('cc-panel');
+        const stdThemeBtn = document.getElementById('cc-btn-theme');
+
+        if (stdPanel) {
+            if (newTheme === 'dark') {
+                stdPanel.setAttribute('data-theme', 'dark');
+                if (stdThemeBtn) stdThemeBtn.textContent = '☀️';
+            } else {
+                stdPanel.removeAttribute('data-theme');
+                if (stdThemeBtn) stdThemeBtn.textContent = '🌙';
+            }
+        }
+
+        const robotThemeBtn = document.getElementById('mech-btn-theme');
+        if (robotThemeBtn) {
+            if (newTheme === 'light') robotThemeBtn.classList.add('active');
+            else robotThemeBtn.classList.remove('active');
+        }
+
+        const droneCard = document.querySelector('.cc-hover-card');
+        if (droneCard) {
+            if (newTheme === 'light') droneCard.classList.add('cc-light-mode');
+            else droneCard.classList.remove('cc-light-mode');
+        }
+
+        if (state.pipWindow && state.pipWindow.document) {
+            const pipBody = state.pipWindow.document.body;
+            if (newTheme === 'light') {
+                pipBody.setAttribute('data-theme', 'light');
+            } else {
+                pipBody.removeAttribute('data-theme');
+            }
+        }
+    }
+
+
     function createPanel() {
         if (document.getElementById('cc-panel')) return;
-        const curLang = window.ccManager.lang;
+        const curLang = state.lang;
         const t = LANG_DATA[curLang];
 
         tooltip = document.createElement('div');
@@ -1519,7 +1038,6 @@
         const aiContent = document.createElement('div');
         aiContent.className = 'cc-ai-content';
         aiDrawer.appendChild(aiContent);
-
         aiContent.innerHTML = `
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid var(--cc-border); padding-bottom:8px;">
                 <div style="font-weight:bold; font-size:14px;">🤖 AI 助手</div>
@@ -1567,7 +1085,6 @@
                 resTab.classList.add('active');
                 aiTab.classList.remove('active');
                 resTab.style.display = 'flex';
-                renderResponsePanel(aiContent);
             }
         }
 
@@ -1594,257 +1111,30 @@
                 drawer.classList.remove('open');
                 document.querySelector('.cc-ai-tab')?.classList.remove('active');
             }
-            if (window.ccManager.streamingModal && window.ccManager.streamingModal.element) {
-                window.ccManager.streamingModal.restore();
+            if (state.streamingModal && state.streamingModal.element) {
+                state.streamingModal.restore();
             } else {
-                const modal = showStreamingResponseModal("", window.ccManager.lastAiConfig);
-                if (window.ccManager.lastAiText) {
-                    modal.append(window.ccManager.lastAiText);
-                    modal.done();
-                }
+                const ctx = state.lastAiContext || "";
+                const cfg = state.lastAiConfig || state.aiConfig;
+                chrome.storage.local.get(['cc_last_layout_mode'], (res) => {
+                    const savedMode = res.cc_last_layout_mode || 'single';
+                    const modal = showStreamingResponseModalMulti(ctx, cfg, savedMode);
+                    if (state.lastAiText) {
+                        modal.append(state.lastAiText);
+                        modal.done();
+                    }
+                });
             }
         };
+
+        if (!shouldShowAI()) {
+            aiTab.style.display = 'none';
+            resTab.style.display = 'none';
+        }
 
         panel.appendChild(aiDrawer);
         panel.appendChild(aiTab);
         panel.appendChild(resTab);
-
-        window.renderCompactSettings = function (container) {
-            if (!container) container = document.querySelector('.cc-ai-content');
-            if (!container) return;
-
-            const config = window.ccManager.aiConfig || {};
-            const t = LANG_DATA[window.ccManager.lang];
-            const MODEL_PRESETS = {
-                'openai': [
-                    'gpt-4o-mini', 'gpt-3.5-turbo', 'gpt-4.1-mini',
-                    'gpt-4o', 'o1', 'gpt-4.1'
-                ],
-
-                'claude': [
-                    'claude-3-haiku', 'claude-3-sonnet', 'claude-3.5-haiku',
-                    'claude-3.5-sonnet', 'claude-3-opus', 'claude-3.5-opus'
-                ],
-
-                'gemini': [
-                    'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro',
-                    'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-pro',
-                ],
-
-                'grok': [
-                    'grok-2-mini', 'grok-2', 'grok-3-mini',
-                    'grok-3', 'grok-4', 'grok-4-fast'
-                ],
-
-                'local': ['llama3', 'mistral', 'gemma']
-            };
-
-            container.innerHTML = `
-                <div style="height:100%; display:flex; flex-direction:column; padding:10px 4px;">
-                    <div style="display:flex; justify-content:space-between; margin-bottom:12px; font-weight:bold; font-size:13px; border-bottom:1px solid var(--cc-border); padding-bottom:6px;">
-                        <span>⚙️ ${t.ai_config_title}</span>
-                        <span id="btn-close-drawer-compact" style="cursor:pointer; opacity:0.6; font-size:14px;">✕</span>
-                    </div>
-
-                    <div style="flex:1; display:flex; flex-direction:column; gap:10px;">
-                        <div>
-                            <label style="font-size:10px; color:var(--cc-text-sub); display:block; margin-bottom:2px;">${t.ai_provider}</label>
-                            <select id="drawer-ai-provider" class="cc-input" style="height:28px !important; margin:0;">
-                                <option value="openai">OpenAI (ChatGPT)</option>
-                                <option value="claude">Anthropic (Claude)</option>
-                                <option value="gemini">Google (Gemini)</option>
-                                <option value="grok">xAI (Grok)</option>
-                                <option value="local">Local (Ollama)</option>
-                            </select>
-                        </div>
-
-                        <div>
-                            <label style="font-size:10px; color:var(--cc-text-sub); display:block; margin-bottom:2px;">${t.ai_api_key}</label>
-                            <input type="password" id="drawer-ai-key" class="cc-input" style="height:28px !important; margin:0;" placeholder="sk-...">
-                        </div>
-
-                        <div>
-                            <label style="font-size:10px; color:var(--cc-text-sub); display:block; margin-bottom:2px;">${t.ai_model}</label>
-                            <div style="display:flex; gap:6px;">
-                                <select id="drawer-ai-model-select" class="cc-input" style="width:24px; padding:0 4px; flex:0 0 auto; cursor:pointer;" title="Quick Select">
-                                    <option value="">▼</option>
-                                </select>
-                                <input type="text" id="drawer-ai-model" class="cc-input" style="height:28px !important; margin:0; flex:1;" placeholder="e.g., gpt-4o">
-                            </div>
-                        </div>
-
-                        <div>
-                            <div id="toggle-advanced" style="font-size:10px; color:var(--cc-text-sub); cursor:pointer; display:flex; align-items:center; gap:4px;">
-                                <span>▶</span> ${t.ai_endpoint_toggle}
-                            </div>
-                            <input type="text" id="drawer-ai-endpoint" class="cc-input" 
-                                style="display:none; height:28px !important; margin-top:4px; font-size:11px;" 
-                                placeholder="https://api...">
-                        </div>
-                    </div>
-
-                    <button id="drawer-save" style="margin-top:12px; width:100%; background:var(--cc-primary); color:#fff; border:none; padding:8px; border-radius:6px; font-weight:bold; cursor:pointer;">
-                        ${t.ai_save}
-                    </button>
-                </div>
-            `;
-
-            const providerSel = container.querySelector('#drawer-ai-provider');
-            const epInput = container.querySelector('#drawer-ai-endpoint');
-            const modelInput = container.querySelector('#drawer-ai-model');
-            const modelSelect = container.querySelector('#drawer-ai-model-select');
-            const advToggle = container.querySelector('#toggle-advanced');
-            const keyInput = container.querySelector('#drawer-ai-key');
-
-            keyInput.value = config.apiKey || '';
-            modelInput.value = config.model || '';
-            epInput.value = config.endpoint || '';
-
-            const updateModelList = async (provider) => {
-                modelSelect.innerHTML = '<option value="">Loading...</option>';
-
-                let models = MODEL_PRESETS[provider] || [];
-                if (provider === 'local') {
-                    try {
-                        const response = await new Promise(resolve => {
-                            chrome.runtime.sendMessage({ action: "GET_OLLAMA_MODELS" }, resolve);
-                        });
-
-                        if (response && response.success && response.models.length > 0) {
-                            models = response.models;
-                        } else {
-                            const opt = document.createElement('option');
-                            opt.value = "";
-                            opt.textContent = "⚠️ Connection failed (please check Ollama)";
-                            opt.disabled = true;
-                            modelSelect.appendChild(opt);
-                        }
-                    } catch (e) {
-                        console.warn("Could not fetch local models", e);
-                    }
-                }
-
-                modelSelect.innerHTML = '<option value="">▼</option>';
-                models.forEach(m => {
-                    const opt = document.createElement('option');
-                    opt.value = m;
-                    opt.textContent = m;
-                    modelSelect.appendChild(opt);
-                });
-            };
-
-            providerSel.value = config.provider || 'openai';
-            updateModelList(providerSel.value);
-
-            if (!epInput.value) {
-                const val = providerSel.value;
-                const currentModel = modelInput.value || (MODEL_PRESETS[val] ? MODEL_PRESETS[val][0] : '');
-                if (val === 'openai') epInput.value = 'https://api.openai.com/v1/chat/completions';
-                else if (val === 'gemini') epInput.value = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:streamGenerateContent`;
-                else if (val === 'claude') epInput.value = 'https://api.anthropic.com/v1/messages';
-                else if (val === 'grok') epInput.value = 'https://api.x.ai/v1/chat/completions';
-                else if (val === 'local') epInput.value = 'http://localhost:11434/api/chat';
-            }
-
-            if (!modelInput.value) {
-                const val = providerSel.value;
-                if (MODEL_PRESETS[val] && MODEL_PRESETS[val].length > 0) {
-                    modelInput.value = MODEL_PRESETS[val][0];
-                }
-            }
-
-            providerSel.onchange = async () => {
-                const val = providerSel.value;
-                let defEp = epInput.value;
-                let defModel = MODEL_PRESETS[val] ? MODEL_PRESETS[val][0] : '';
-
-                if (val === 'openai') {
-                    defEp = 'https://api.openai.com/v1/chat/completions';
-                }
-                else if (val === 'gemini') {
-                    defEp = `https://generativelanguage.googleapis.com/v1beta/models/${defModel}:streamGenerateContent`;
-                }
-                else if (val === 'claude') {
-                    defEp = 'https://api.anthropic.com/v1/messages';
-                }
-                else if (val === 'grok') {
-                    defEp = 'https://api.x.ai/v1/chat/completions';
-                }
-                else if (val === 'local') {
-                    defEp = 'http://localhost:11434/api/chat';
-                    advToggle.click();
-                }
-
-                epInput.value = defEp;
-                await updateModelList(val);
-                if (modelSelect.options.length > 1) {
-                    const firstModel = modelSelect.options[1].value;
-                    modelInput.value = firstModel;
-                }
-
-            };
-
-            modelSelect.onchange = () => {
-                if (modelSelect.value) {
-                    modelInput.value = modelSelect.value;
-                    if (providerSel.value === 'gemini') {
-                        epInput.value = `https://generativelanguage.googleapis.com/v1beta/models/${modelSelect.value}:streamGenerateContent`;
-                    }
-                    flashInput(modelInput);
-                }
-            };
-
-            modelInput.oninput = () => {
-                if (providerSel.value === 'gemini') {
-                    const typedModel = modelInput.value.trim();
-                    if (typedModel) {
-                        epInput.value = `https://generativelanguage.googleapis.com/v1beta/models/${typedModel}:streamGenerateContent`;
-                    }
-                }
-            };
-
-            advToggle.onclick = () => {
-                const isHidden = epInput.style.display === 'none';
-                epInput.style.display = isHidden ? 'block' : 'none';
-                advToggle.querySelector('span').innerText = isHidden ? '▼' : '▶';
-            };
-
-            container.querySelector('#drawer-save').onclick = function () {
-                const newConfig = {
-                    configured: true,
-                    provider: providerSel.value,
-                    endpoint: epInput.value.trim(),
-                    apiKey: container.querySelector('#drawer-ai-key').value.trim(),
-                    model: modelInput.value.trim()
-                };
-
-                const btn = this;
-                chrome.storage.local.set({ 'cc_ai_config': newConfig }, () => {
-                    window.ccManager.aiConfig = newConfig;
-                    btn.innerText = "OK!";
-
-                    setTimeout(() => {
-                        const drawer = document.getElementById('cc-ai-drawer-panel');
-                        if (drawer) drawer.classList.remove('open');
-                        document.querySelector('.cc-ai-tab')?.classList.remove('active');
-                        const resTab = document.querySelector('.cc-res-tab');
-                        if (resTab) resTab.style.display = 'flex';
-
-                        btn.innerText = t.ai_settings_save || 'Save Settings';
-                    }, 500);
-
-                    loadAiConfig();
-                });
-            };
-
-            container.querySelector('#btn-close-drawer-compact').onclick = () => {
-                document.getElementById('cc-ai-drawer-panel').classList.remove('open');
-                document.querySelector('.cc-ai-tab').classList.remove('active');
-
-                const resTab = document.querySelector('.cc-res-tab');
-                if (resTab) resTab.style.display = 'flex';
-            };
-        };
 
         const configBtn = aiContent.querySelector('#btn-ai-config');
         configBtn.onclick = () => {
@@ -1866,53 +1156,46 @@
         statusBadge.id = 'status-badge';
         statusBadge.className = 'cc-status';
         statusBadge.textContent = '0';
-        titleWrapper.appendChild(statusBadge);
 
         const controls = document.createElement('div');
         controls.className = 'cc-controls';
+
+        if ('documentPictureInPicture' in window) {
+            const pipBtn = document.createElement('button');
+            pipBtn.className = 'cc-icon-btn';
+            pipBtn.innerText = '⏏';
+            pipBtn.title = "Open Independent Window (PiP)";
+            pipBtn.onclick = openDedicatedPiP;
+            controls.appendChild(pipBtn);
+        }
         const robotBtn = document.createElement('button');
         robotBtn.className = 'cc-icon-btn';
         robotBtn.innerText = '🚁';
         robotBtn.title = "Switch to Sky-Crane UI";
         robotBtn.onclick = () => toggleUIMode('robot');
         controls.appendChild(robotBtn);
+
         const langBtn = document.createElement('button');
         langBtn.id = 'cc-btn-lang';
         langBtn.className = 'cc-icon-btn';
         langBtn.textContent = '🌐';
         langBtn.title = t.btn_lang_title + t.hint_shortcut_lang;
         langBtn.onclick = function () {
-            const oldLang = window.ccManager.lang;
+            const oldLang = state.lang;
             const newLang = oldLang === 'zh' ? 'en' : 'zh';
-            const currentInput = prefixInput?.value?.trim() || '';
-            const oldDefault = LANG_DATA[oldLang].default_prompt.trim();
-            if (currentInput === oldDefault) {
-                prefixInput.value = LANG_DATA[newLang].default_prompt;
-            }
-            window.ccManager.lang = newLang;
+            switchPromptLanguage(oldLang, newLang);
+            state.lang = newLang;
             updateUITexts();
         };
         controls.appendChild(langBtn);
         const themeBtn = document.createElement('button');
         themeBtn.id = 'cc-btn-theme';
         themeBtn.className = 'cc-icon-btn';
-        themeBtn.textContent = '🌙';
+        themeBtn.textContent = state.theme === 'dark' ? '☀️' : '🌙';
         themeBtn.title = t.btn_theme_title;
         themeBtn.onclick = function () {
-            const isDark = panel.getAttribute('data-theme') === 'dark';
-            const targets = [
-                document.getElementById('cc-panel'),
-                document.getElementById('cc-ai-settings-panel'),
-                document.getElementById('cc-ai-response-panel')
-            ];
-
-            if (isDark) {
-                targets.forEach(el => el && el.removeAttribute('data-theme'));
-                themeBtn.textContent = '🌙';
-            } else {
-                targets.forEach(el => el && el.setAttribute('data-theme', 'dark'));
-                themeBtn.textContent = '☀️';
-            }
+            const nextTheme = state.theme === 'dark' ? 'light' : 'dark';
+            applyTheme(nextTheme);
         };
         controls.appendChild(themeBtn);
 
@@ -1945,7 +1228,7 @@
             if (p.id === 'gemini') btn.classList.add('p-gemini');
             if (p.id === 'grok') btn.classList.add('p-grok');
             btn.innerHTML = `<i>${p.icon}</i> ${p.name}`;
-            btn.title = `Transfer to ${p.name}`;
+            btn.title = t.tooltip_transfer_to.replace('{name}', p.name);
             btn.onclick = () => handleCrossTransfer(p);
             transferContainer.appendChild(btn);
         });
@@ -1973,20 +1256,23 @@
         aiToolsRow.className = 'cc-tools';
         aiToolsRow.style.marginTop = '4px';
 
-        btnSummary = document.createElement('button');
-        btnSummary.className = 'tool-btn btn-ai-low';
-        btnSummary.textContent = t.btn_summary;
-        btnSummary.onclick = () => {
-            if (window.ccManager.streamingModal && window.ccManager.streamingModal.isMinimized) {
-                window.ccManager.streamingModal.restore();
-                return;
-            }
-            handleAiSummary();
-        };
-        aiToolsRow.appendChild(btnSummary);
+        if (shouldShowAI()) {
+            btnSummary = document.createElement('button');
+            btnSummary.className = 'tool-btn btn-ai-low';
+            btnSummary.textContent = t.btn_summary;
+            btnSummary.onclick = () => {
+                if (state.streamingModal && state.streamingModal.isMinimized) {
+                    state.streamingModal.restore();
+                    return;
+                }
+                handleAiSummary();
+            };
+            aiToolsRow.appendChild(btnSummary);
+        }
 
         const drawerToggle = document.createElement('div');
         drawerToggle.className = 'cc-drawer-toggle';
+        drawerToggle.id = 'cc-drawer-toggle';
         drawerToggle.innerHTML = `<span class="arrow">▼</span>${t.drawer_toggle}`;
         drawerToggle.onclick = () => {
             panel.classList.toggle('expanded');
@@ -1994,38 +1280,77 @@
         const drawer = document.createElement('div');
         drawer.className = 'cc-drawer';
 
+        const prefixHeader = document.createElement('div');
+        prefixHeader.id = 'cc-prefix-header';
+        Object.assign(prefixHeader.style, {
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '4px'
+        });
+
         prefixLabel = document.createElement('div');
         prefixLabel.textContent = t.label_prefix;
         prefixLabel.style.fontWeight = '600';
         prefixLabel.style.fontSize = '12px';
-        prefixLabel.style.marginBottom = '4px';
+
+        const prefixToolbar = document.createElement('div');
+        prefixToolbar.className = 'cc-sys-toolbar';
+        Object.assign(prefixToolbar.style, {
+            display: 'flex',
+            gap: '4px'
+        });
+
+        const btnSum = createSysBtn('sys-btn-sum', 'sys_btn_summary', 'sys_tooltip_summary', 'sys_prompt_summary');
+        const btnTrans = createSysBtn('sys-btn-trans', 'sys_btn_translate', 'sys_tooltip_translate', 'sys_prompt_translate');
+        const btnExp = createSysBtn('sys-btn-exp', 'sys_btn_explain', 'sys_tooltip_explain', 'sys_prompt_explain');
+        const btnSave = createSysBtn('sys-btn-save', 'sys_btn_save', 'sys_tooltip_save', null);
+        btnSave.onclick = (e) => {
+            e.stopPropagation();
+            handleSavePromptClick();
+        };
+
+        const btnLoad = createSysBtn('sys-btn-load', 'sys_btn_custom_user', 'sys_tooltip_load', null);
+        btnLoad.textContent = '👤';
+        btnLoad.onclick = (e) => {
+            e.stopPropagation();
+            handleLoadPromptClick(btnLoad);
+        };
+
+        prefixToolbar.append(btnSum, btnTrans, btnExp, btnSave, btnLoad);
+        prefixHeader.append(prefixLabel, prefixToolbar);
 
         prefixInput = document.createElement('textarea');
         prefixInput.id = 'cc-prefix-input';
         prefixInput.className = 'cc-input';
         prefixInput.value = t.default_prompt;
         prefixInput.placeholder = t.placeholder;
-        prefixInput.addEventListener('input', calculateTotalTokens);
-
+        prefixInput.addEventListener('input', debounce(calculateTotalTokens, 300));
         const basketInfo = document.createElement('div');
         basketInfo.className = 'basket-info';
+        basketInfo.id = 'cc-basket-info';
+
         basketLabel = document.createElement('span');
         basketLabel.style.display = 'none';
+        basketLabel.id = 'cc-basket-label';
         basketInfo.appendChild(basketLabel);
         basketStatus = document.createElement('span');
         basketStatus.textContent = t.basket_status_empty;
         basketStatus.style.cursor = 'pointer';
+        basketStatus.id = 'cc-basket-status';
         basketStatus.onclick = toggleBasketPreview;
         basketInfo.appendChild(basketStatus);
         btnClearBasket = document.createElement('span');
         btnClearBasket.textContent = t.btn_clear_basket;
         btnClearBasket.style.cursor = 'pointer';
         btnClearBasket.style.color = 'var(--cc-primary)';
+        btnClearBasket.id = 'cc-btn-clear-basket';
         btnClearBasket.onclick = handleClearBasket;
         basketInfo.appendChild(btnClearBasket);
 
         const basketBtnRow = document.createElement('div');
         basketBtnRow.className = 'cc-tools';
+        basketBtnRow.id = 'cc-basket-toolbar';
         btnAddBasket = document.createElement('button');
         btnAddBasket.className = 'tool-btn';
         btnAddBasket.textContent = t.btn_add_basket;
@@ -2055,7 +1380,7 @@
         dropOverlay.className = 'cc-drop-overlay';
         dropOverlay.innerHTML = `
             <div style="font-size: 24px; margin-bottom: 4px;">📥</div>
-            <div style="font-size: 12px; font-weight: bold;">Drop to Add to Basket</div>
+            <div class="cc-drop-text" style="font-size: 12px; font-weight: bold;">${t.overlay_drop_add}</div>
         `;
         Object.assign(dropOverlay.style, {
             position: 'absolute', top: '0', left: '0', width: '100%', height: '100%',
@@ -2089,6 +1414,7 @@
 
         const extraActions = document.createElement('div');
         extraActions.className = 'cc-tools';
+        extraActions.id = 'cc-extra-actions';
         btnDl = document.createElement('button');
         btnDl.className = 'tool-btn';
         btnDl.textContent = t.btn_dl;
@@ -2098,17 +1424,30 @@
         btnScan.textContent = t.btn_scan;
         btnScan.onclick = function () {
             performScan();
-            this.textContent = LANG_DATA[window.ccManager.lang].btn_scan_done;
+            this.textContent = LANG_DATA[state.lang].btn_scan_done;
             setTimeout(() => {
-                this.textContent = LANG_DATA[window.ccManager.lang].btn_scan;
+                this.textContent = LANG_DATA[state.lang].btn_scan;
             }, 1000);
         };
-        extraActions.append(btnPaint, btnDl, btnScan);
-        drawer.append(prefixLabel, prefixInput, basketInfo, basketBtnRow, basketContainer, tokenDisplay, extraActions);
+        const btnAiConfig = document.createElement('button');
+        btnAiConfig.id = 'cc-btn-ai-config';
+        btnAiConfig.className = 'tool-btn';
+        btnAiConfig.textContent = t.btn_quick_settings;
+        btnAiConfig.title = t.ai_setting_tab;
+        btnAiConfig.onclick = () => {
+            const container = document.querySelector('.cc-ai-content');
+            if (container) {
+                document.getElementById('cc-ai-drawer-panel').classList.add('open');
+                toggleAiSettingsInDrawer(container);
+            }
+        };
+        extraActions.append(btnPaint, btnDl, btnScan, btnAiConfig);
+        drawer.append(prefixHeader, prefixInput, basketInfo, basketBtnRow, basketContainer, tokenDisplay, extraActions);
         panel.append(header, msg, transferLabel, transferContainer, toolsRow, aiToolsRow, drawerToggle, drawer);
         panel.addEventListener('dragover', (e) => {
             if (e.dataTransfer.types.includes('application/cc-sort')) return;
             e.preventDefault();
+            e.stopPropagation();
             e.dataTransfer.dropEffect = 'copy';
             if (!panel.classList.contains('expanded')) {
                 panel.classList.add('expanded');
@@ -2133,6 +1472,7 @@
             basketContainer.style.transform = 'scale(1)';
             if (e.dataTransfer.types && e.dataTransfer.types.includes('application/cc-sort')) return;
             e.preventDefault();
+            e.stopPropagation();
 
             const files = e.dataTransfer.files;
             if (files && files.length > 0) {
@@ -2142,16 +1482,18 @@
                         reader.onload = (ev) => {
                             const content = (ev.target.result || '').trim();
                             if (!content) return;
-                            getBasket((basket) => {
-                                basket.push({
+                            basketOp({
+                                kind: 'ADD',
+                                item: {
                                     text: content,
                                     timestamp: Date.now(),
-                                    source: file.name + " (Local File)"
-                                });
-                                chrome.storage.local.set({ 'cc_basket': basket }, () => {
-                                    showToast(LANG_DATA[window.ccManager.lang].toast_basket_add || 'Added to basket');
-                                    updateBasketUI();
-                                });
+                                    source: file.name + t.src_local
+                                }
+                            }, () => {
+                                showToast(LANG_DATA[state.lang].toast_basket_add || 'Added to basket');
+                                updateBasketUI();
+                                panel.classList.add('expanded');
+                                toggleBasketPreview(true);
                             });
                         };
                         reader.readAsText(file);
@@ -2162,38 +1504,472 @@
 
             const text = e.dataTransfer.getData('text');
             if (text && text.trim().length > 0) {
-                getBasket((basket) => {
-                    basket.push({
+                basketOp({
+                    kind: 'ADD',
+                    item: {
                         text: text.trim(),
                         timestamp: Date.now(),
-                        source: window.location.hostname + " (Drag & Drop)"
-                    });
-                    chrome.storage.local.set({ 'cc_basket': basket }, () => {
-                        showToast(LANG_DATA[window.ccManager.lang].toast_basket_add || "已拖曳加入籃子 🧺");
-                        updateBasketUI();
-                    });
+                        source: window.location.hostname + t.src_drop
+                    }
+                }, () => {
+                    showToast(LANG_DATA[state.lang].toast_basket_add || "已拖曳加入籃子 🧺");
+                    updateBasketUI();
+                    panel.classList.add('expanded');
+                    toggleBasketPreview(true);
                 });
             }
         });
 
-        if (!window.ccManager.config) {
+        if (!state.config) {
             if (msg) msg.style.display = 'none';
             if (btnSelectAll) btnSelectAll.style.display = 'none';
             if (btnUnselectAll) btnUnselectAll.style.display = 'none';
             if (transferContainer) transferContainer.style.display = 'none';
             if (transferLabel) transferLabel.style.display = 'none';
             if (btnScan) btnScan.style.display = 'none';
-            const curLang = window.ccManager.lang;
+            const curLang = state.lang;
             title.textContent = curLang === 'zh' ? 'Context-Carry' : 'Context-Carry';
+        }
+
+        if (state.theme === 'dark') {
+            panel.setAttribute('data-theme', 'dark');
         }
 
         document.body.appendChild(panel);
         makeDraggable(panel, header);
     }
 
+    function createTransportDrone() {
+        injectStyles();
+        if (document.getElementById('cc-drone-fab')) return;
+        const host = window.location.hostname;
+        chrome.storage.local.get(['cc_disabled_domains'], (res) => {
+            const disabledList = res.cc_disabled_domains || [];
+            if (disabledList.includes(host)) {
+                return;
+            }
+            initDroneDOM();
+        });
+        function initDroneDOM() {
+            let selectionState = {};
+
+            const initData = () => {
+                const load = (data) => {
+                    basket = data || [];
+                    updateDroneVisuals();
+                };
+                if (typeof getBasket === 'function') getBasket(load);
+                else chrome.storage.local.get(['cc_basket'], (res) => load(res.cc_basket));
+            };
+
+            function forceInsertToLLM(text) {
+                if (!text) return;
+                const curT = LANG_DATA[state.lang];
+                let inputEl = null;
+                if (state.config && state.config.inputSelector) {
+                    inputEl = document.querySelector(state.config.inputSelector);
+                }
+                if (!inputEl) {
+                    const genericSelectors = ['#prompt-textarea', 'div[contenteditable="true"].ProseMirror', '.ql-editor[contenteditable="true"]', 'textarea[placeholder*="Ask"]', 'textarea', 'div[contenteditable="true"]', 'input[type="text"]'];
+                    for (let sel of genericSelectors) { inputEl = document.querySelector(sel); if (inputEl) break; }
+                }
+                if (inputEl) {
+                    autoFillInput(inputEl, text);
+                    showToast(curT.toast_autofill || "Content pasted to input ✨");
+                } else {
+                    navigator.clipboard.writeText(text).then(() => {
+                        showToast(curT.toast_input_not_found || "Content copied to clipboard 📋");
+                    });
+                }
+            }
+
+            const drone = document.createElement('div');
+            drone.id = 'cc-drone-fab';
+            drone.className = 'cc-drone-fab';
+
+            drone.style.visibility = 'hidden';
+            drone.style.opacity = '0';
+            chrome.storage.local.get(['cc_drone_pos'], (res) => {
+                if (res.cc_drone_pos) {
+                    drone.style.left = res.cc_drone_pos.left;
+                    drone.style.top = res.cc_drone_pos.top;
+                    drone.style.bottom = 'auto'; drone.style.right = 'auto';
+                }
+                document.body.appendChild(drone);
+                requestAnimationFrame(() => {
+                    drone.style.visibility = 'visible';
+                    drone.style.opacity = '';
+                });
+            });
+
+            drone.title = LANG_DATA[state.lang].drone_title;
+            drone.innerHTML = `
+                <div class="drone-close-btn" title="${LANG_DATA[state.lang].drone_dismiss}">✕</div>
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="pointer-events:none;">
+                    <path d="M12 2L15 8H9L12 2Z" fill="#00d2ff" fill-opacity="0.8"/>
+                    <path d="M2 12L8 9L12 11L16 9L22 12" stroke="#e0e6ed" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <rect x="10" y="11" width="4" height="6" rx="1" fill="#334155" stroke="#475569"/>
+                    <path d="M4 12V14" stroke="#475569" stroke-width="1.5"/>
+                    <path d="M20 12V14" stroke="#475569" stroke-width="1.5"/>
+                    <circle cx="2" cy="12" r="1.5" class="drone-propeller" fill="rgba(255,255,255,0.5)"/>
+                    <circle cx="22" cy="12" r="1.5" class="drone-propeller" fill="rgba(255,255,255,0.5)"/>
+                </svg>
+                <div id="cc-drone-badge">0</div>
+            `;
+            document.body.appendChild(drone);
+
+            const badgeEl = drone.querySelector('#cc-drone-badge');
+            const closeEl = drone.querySelector('.drone-close-btn');
+
+            const card = document.createElement('div');
+            card.className = 'cc-hover-card';
+            if (state.theme === 'light') card.classList.add('cc-light-mode');
+            card.innerHTML = `
+                <div class="cc-card-header">
+                    <span id="cc-card-label">Cargo: 0</span>
+                    <span class="cc-select-all">Select All</span>
+                </div>
+                <div class="cc-list-container" id="cc-list-container"></div>
+                <div class="cc-card-footer">
+                    <button class="cc-btn-xs cc-btn-primary-xs" id="cc-paste-btn">📋 Paste</button>
+                    <button class="cc-btn-xs" id="cc-clear-btn" title="Clear">🗑️</button>
+                    <button class="cc-btn-xs" id="cc-expand-btn" title="Expand">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+                        </svg>
+                    </button> 
+                </div>
+            `;
+            document.body.appendChild(card);
+
+            const listContainer = card.querySelector('#cc-list-container');
+
+            updateHoverCardUI = updateDroneVisuals = () => {
+                const curT = LANG_DATA[state.lang];
+
+                const total = basket.length;
+                badgeEl.textContent = total;
+                badgeEl.classList.toggle('visible', total > 0);
+                if (total > 0) {
+                    drone.classList.add('has-cargo');
+                    badgeEl.style.opacity = '1'; badgeEl.style.transform = 'scale(1)';
+                } else {
+                    drone.classList.remove('has-cargo');
+                    badgeEl.style.opacity = '0'; badgeEl.style.transform = 'scale(0)';
+                }
+
+                basket.forEach((it) => { if (it && it.id && selectionState[it.id] === undefined) selectionState[it.id] = true; });
+                const selectedCount = basket.filter(it => it && it.id && selectionState[it.id]).length;
+                const isAllSelected = (total > 0 && selectedCount === total);
+
+                const label = card.querySelector('#cc-card-label');
+                const selectAllBtn = card.querySelector('.cc-select-all');
+
+                const cargoTitle = curT.drone_cargo || "Cargo";
+                label.textContent = `${cargoTitle}: ${total}`;
+                selectAllBtn.textContent = isAllSelected ? curT.btn_unselect_all : curT.btn_select_all;
+
+                listContainer.innerHTML = '';
+                if (total === 0) {
+                    const emptyText = curT.pip_basket_empty || "Empty";
+                    const dragText = curT.src_drop || "Drag text here";
+                    listContainer.innerHTML = `<div style="text-align:center;padding:30px 10px;color:#666;font-size:12px;">${emptyText}<br><span style="font-size:10px;opacity:0.7">${dragText}</span></div>`;
+                } else {
+                    basket.forEach((item, idx) => {
+                        const row = document.createElement('div');
+                        const id = item.id || String(idx);
+                        row.className = `cc-list-item ${selectionState[id] ? 'selected' : ''}`;
+                        row.draggable = true;
+                        const safeText = item.text ? item.text.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])) : '';
+
+                        row.innerHTML = `
+                            <div class="cc-check-circle"></div>
+                            <div style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; pointer-events:none; opacity:0.9;">
+                                ${safeText}
+                            </div>
+                            <div style="font-size:10px; color:#666; font-family:monospace;">≡</div>
+                        `;
+
+                        row.onclick = (e) => {
+                            e.stopPropagation();
+                            selectionState[id] = !selectionState[id];
+                            updateHoverCardUI();
+                        };
+
+                        row.addEventListener('dragstart', (e) => {
+                            e.dataTransfer.effectAllowed = 'copyMove';
+                            e.dataTransfer.setData('text/plain', item.text);
+                            e.dataTransfer.setData('application/cc-drone-id', id);
+                            row.classList.add('dragging');
+                        });
+                        row.addEventListener('dragend', () => { row.classList.remove('dragging'); });
+                        row.addEventListener('dragover', (e) => {
+                            e.preventDefault();
+                            if (e.dataTransfer.types.includes('application/cc-drone-id')) row.style.borderTop = '2px solid #00d2ff';
+                        });
+                        row.addEventListener('dragleave', () => { row.style.borderTop = 'transparent'; });
+                        row.addEventListener('drop', (e) => {
+                            e.preventDefault();
+                            row.style.borderTop = 'transparent';
+
+                            const fromId = e.dataTransfer.getData('application/cc-drone-id');
+                            const toId = item.id;
+                            if (!fromId || !toId || fromId === toId) return;
+
+                            const order = basket.map(it => it.id).filter(Boolean);
+                            const fromIndex = order.indexOf(fromId);
+                            const toIndex = order.indexOf(toId);
+                            if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+
+                            const [moved] = order.splice(fromIndex, 1);
+                            order.splice(toIndex, 0, moved);
+
+                            selectionState = {};
+                            basket.forEach((it) => { if (it && it.id) selectionState[it.id] = true; });
+
+                            basketOp({ kind: 'REORDER', order }, () => {
+                                updateBasketUI();
+                            });
+                            updateHoverCardUI();
+                        });
+                        listContainer.appendChild(row);
+                    });
+                }
+                const activeCount = basket.filter(it => it && it.id && selectionState[it.id]).length;
+                const pasteBtn = card.querySelector('#cc-paste-btn');
+                const pasteTxt = curT.pip_btn_paste || "Paste";
+                pasteBtn.innerHTML = activeCount > 0 ? `📋 ${pasteTxt} (${activeCount})` : `📋 ${pasteTxt} All`;
+                pasteBtn.style.opacity = (activeCount === 0 && total > 0) ? '0.8' : '1';
+
+                const clearBtn = card.querySelector('#cc-clear-btn');
+                const expandBtn = card.querySelector('#cc-expand-btn');
+                if (clearBtn) clearBtn.title = curT.btn_clear_basket;
+                if (expandBtn) expandBtn.title = curT.pip_tooltip_max;
+            };
+
+            const moveItem = (index, direction) => {
+                const order = basket.map(it => it.id).filter(Boolean);
+                const target = index + direction;
+                if (target < 0 || target >= order.length) return;
+
+                [order[index], order[target]] = [order[target], order[index]];
+                basketOp({ kind: 'REORDER', order });
+                updateDroneVisuals();
+            };
+
+
+            card.querySelector('#cc-paste-btn').onclick = (e) => {
+                e.stopPropagation();
+                if (basket.length === 0) return;
+                let textToPaste = "";
+                const byId = new Map(basket.filter(it => it && it.id).map(it => [it.id, it]));
+                const selectedIds = basket.map(it => it && it.id).filter(id => id && selectionState[id]);
+                if (selectedIds.length > 0) {
+                    textToPaste = selectedIds.map(id => (byId.get(id)?.text || '')).filter(Boolean).join('\n\n');
+                } else {
+                    textToPaste = basket.map(i => i.text).join('\n\n');
+                }
+                forceInsertToLLM(textToPaste);
+                card.style.transform = "translateY(0) scale(1.02)";
+                setTimeout(() => card.style.transform = "translateY(0) scale(1)", 150);
+            };
+
+            card.querySelector('.cc-select-all').onclick = (e) => {
+                e.stopPropagation();
+                const total = basket.length;
+                const currentSel = basket.filter(it => it && it.id && selectionState[it.id]).length;
+                const target = currentSel < total;
+                selectionState = {}; basket.forEach(it => { if (it && it.id) selectionState[it.id] = target; });
+                updateDroneVisuals();
+            };
+
+            card.querySelector('#cc-clear-btn').onclick = () => {
+                const curT = LANG_DATA[state.lang];
+                showMainConfirmModal(
+                    curT.pip_modal_clear_title || "Clear Basket",
+                    curT.pip_modal_clear_msg || "Are you sure you want to remove all items?",
+                    () => {
+                        basket = []; selectionState = {};
+                        basketOp({ kind: 'CLEAR' });
+                        updateDroneVisuals();
+                        showToast(curT.toast_basket_clear);
+                    }
+                );
+            };
+
+            card.querySelector('#cc-expand-btn').onclick = () => {
+                toggleInterface();
+                card.classList.remove('visible');
+            };
+
+            let isDragging = false;
+            let hasMoved = false;
+            let startX, startY, initX, initY;
+
+            const onMouseMove = (e) => {
+                if (!isDragging) return;
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+
+                if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+                    hasMoved = true;
+                    card.classList.remove('visible');
+                }
+                drone.style.left = (initX + dx) + 'px';
+                drone.style.top = (initY + dy) + 'px';
+                drone.style.bottom = 'auto'; drone.style.right = 'auto';
+            };
+
+            const onMouseUp = () => {
+                if (!isDragging) return;
+                isDragging = false;
+                drone.style.transition = '';
+                if (hasMoved) {
+                    const rect = drone.getBoundingClientRect();
+                    chrome.storage.local.set({ 'cc_drone_pos': { left: rect.left + 'px', top: rect.top + 'px' } });
+                }
+            };
+
+            drone.addEventListener('mousedown', (e) => {
+                if (e.target === closeEl) return;
+                isDragging = true;
+                hasMoved = false;
+                startX = e.clientX; startY = e.clientY;
+                const rect = drone.getBoundingClientRect();
+                initX = rect.left; initY = rect.top;
+                drone.style.transition = 'none';
+                e.preventDefault();
+            });
+
+            window.addEventListener('mousemove', onMouseMove);
+            window.addEventListener('mouseup', onMouseUp);
+
+            const cleanupDrone = () => {
+                window.removeEventListener('mousemove', onMouseMove);
+                window.removeEventListener('mouseup', onMouseUp);
+                drone.remove();
+                card.remove();
+            };
+
+            drone.addEventListener('click', (e) => {
+                if (hasMoved || e.target === closeEl) return;
+                toggleInterface();
+                card.classList.remove('visible');
+            });
+
+            closeEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                chrome.storage.local.get(['cc_disabled_domains'], (res) => {
+                    const list = res.cc_disabled_domains || [];
+                    const h = window.location.hostname;
+                    if (!list.includes(h)) {
+                        list.push(h);
+                        chrome.storage.local.set({ cc_disabled_domains: list });
+                    }
+                });
+                drone.style.transform = "scale(0)";
+                setTimeout(() => { cleanupDrone(); }, 200);
+            });
+
+            drone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                drone.classList.add('drag-over');
+            });
+            drone.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                drone.classList.remove('drag-over');
+            });
+            drone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                drone.classList.remove('drag-over');
+                const text = e.dataTransfer.getData('text');
+                const curT = LANG_DATA[state.lang];
+                if (text) {
+                    basketOp({
+                        kind: 'ADD',
+                        item: {
+                            text: text.trim(),
+                            timestamp: Date.now(),
+                            source: window.location.hostname + (curT.src_drop || " (Drag & Drop)")
+                        }
+                    }, (res) => {
+                        getBasket((newBasket) => {
+                            basket = newBasket;
+                            updateDroneVisuals();
+                            updateDroneUI(newBasket);
+                            showToast(curT.toast_basket_add || "Added 🧺");
+                        });
+                    });
+                }
+            });
+
+            let hoverTimer;
+            const showCard = () => {
+                clearTimeout(hoverTimer);
+                updateDroneVisuals();
+                const dRect = drone.getBoundingClientRect();
+                card.style.display = 'flex';
+                const cH = card.offsetHeight || 200;
+                const cW = card.offsetWidth || 280;
+
+                let top = dRect.top - cH - 12;
+                let left = dRect.left + (dRect.width / 2) - (cW / 2);
+
+                if (top < 10) top = dRect.bottom + 12;
+                if (left < 10) left = 10;
+                if (left + cW > window.innerWidth) left = window.innerWidth - cW - 10;
+
+                card.style.top = top + 'px';
+                card.style.left = left + 'px';
+                requestAnimationFrame(() => card.classList.add('visible'));
+            };
+
+            drone.addEventListener('mouseenter', () => { if (!isDragging) showCard(); });
+            drone.addEventListener('mouseleave', () => { hoverTimer = setTimeout(() => card.classList.remove('visible'), 300); });
+            card.addEventListener('mouseenter', () => clearTimeout(hoverTimer));
+            card.addEventListener('mouseleave', () => { hoverTimer = setTimeout(() => card.classList.remove('visible'), 300); });
+
+            initData();
+        }
+    }
+
+    function updateDroneUI(providedBasket) {
+        const drone = document.getElementById('cc-drone-fab');
+        if (!drone) return;
+
+        const updateLogic = (basket) => {
+            const count = basket.length;
+            const badge = document.getElementById('cc-drone-badge');
+
+            if (count > 0) {
+                drone.classList.add('has-cargo');
+                if (badge) {
+                    badge.innerText = count;
+                    badge.style.opacity = '1';
+                    badge.style.transform = 'scale(1)';
+                }
+            } else {
+                drone.classList.remove('has-cargo');
+                if (badge) {
+                    badge.innerText = '0';
+                    badge.style.opacity = '0';
+                    badge.style.transform = 'scale(0)';
+                }
+            }
+        };
+
+        if (Array.isArray(providedBasket)) {
+            updateLogic(providedBasket);
+        } else {
+            getBasket(updateLogic);
+        }
+    }
+
     function createRobotPanel() {
         if (document.getElementById('cc-robot-panel')) return;
-        const t = LANG_DATA[window.ccManager.lang];
+        const t = LANG_DATA[state.lang];
         if (!document.getElementById('cc-tooltip')) {
             tooltip = document.createElement('div');
             tooltip.id = 'cc-tooltip';
@@ -2216,11 +1992,20 @@
 
         const antenna = document.createElement('div');
         antenna.className = 'antenna-group';
-        antenna.title = t.ai_setting_tab;
+
+        antenna.onclick = () => openRobotSettings();
+        antenna.style.cursor = 'pointer';
+
+        if (shouldShowAI()) {
+            antenna.title = t.ai_setting_tab;
+            antenna.style.opacity = '1';
+        } else {
+            antenna.title = t.unlock_title;
+            antenna.style.opacity = '0.5';
+        }
+
         antenna.innerHTML = `<div class="antenna-tip"></div><div class="antenna-rod"></div><div class="antenna-base"></div>`;
-        antenna.onclick = () => {
-            openRobotSettings();
-        };
+
 
         const leftShoulder = document.createElement('div');
         leftShoulder.className = 'shoulder-pad shoulder-left';
@@ -2273,6 +2058,7 @@
         const powerGroup = document.createElement('div');
         powerGroup.className = 'power-group';
 
+
         const uiSwitch = document.createElement('div');
         uiSwitch.id = 'mech-btn-ui-switch';
         uiSwitch.className = 'power-btn active';
@@ -2282,35 +2068,24 @@
         const themeSwitch = document.createElement('div');
         themeSwitch.id = 'mech-btn-theme';
         themeSwitch.className = 'power-btn';
-        if (document.body.getAttribute('data-theme') === 'light') themeSwitch.classList.add('active');
+        if (state.theme === 'light') themeSwitch.classList.add('active');
         themeSwitch.title = t.btn_theme_title;
         themeSwitch.style.borderColor = '#ff9800';
         themeSwitch.onclick = function () {
-            this.classList.toggle('active');
-            const body = document.body;
-            if (body.getAttribute('data-theme') === 'light') {
-                body.removeAttribute('data-theme');
-            } else {
-                body.setAttribute('data-theme', 'light');
-            }
+            const nextTheme = state.theme === 'dark' ? 'light' : 'dark';
+            applyTheme(nextTheme);
         };
-
         const langSwitch = document.createElement('div');
         langSwitch.className = 'power-btn';
         langSwitch.id = 'mech-btn-lang';
-        if (window.ccManager.lang === 'en') langSwitch.classList.add('active');
+        if (state.lang === 'en') langSwitch.classList.add('active');
         langSwitch.title = t.btn_lang_title + t.hint_shortcut_lang;
         langSwitch.style.borderColor = '#4CAF50';
         langSwitch.onclick = function () {
-            const oldLang = window.ccManager.lang;
+            const oldLang = state.lang;
             const newLang = oldLang === 'zh' ? 'en' : 'zh';
-            const currentInput = prefixInput?.value?.trim() || '';
-            const oldDefault = LANG_DATA[oldLang].default_prompt.trim();
-            if (currentInput === oldDefault) {
-                prefixInput.value = LANG_DATA[newLang].default_prompt;
-            }
-
-            window.ccManager.lang = newLang;
+            switchPromptLanguage(oldLang, newLang);
+            state.lang = newLang;
             this.classList.toggle('active');
             updateUITexts();
             const statusText = document.getElementById('mech-status-text');
@@ -2319,17 +2094,44 @@
 
         powerGroup.append(uiSwitch, themeSwitch, langSwitch);
 
+        const actionGroup = document.createElement('div');
+        actionGroup.style.display = 'flex';
+        actionGroup.style.alignItems = 'center';
+        actionGroup.style.gap = '6px';
+
+        if ('documentPictureInPicture' in window) {
+            const ejectBtn = document.createElement('div');
+            ejectBtn.className = 'mech-close-btn';
+            ejectBtn.id = 'mech-btn-eject';
+            ejectBtn.innerText = '⏏';
+            ejectBtn.title = "Pop out (PiP Mode)";
+            ejectBtn.style.borderColor = '#00d2ff';
+            ejectBtn.style.color = '#00d2ff';
+            ejectBtn.style.background = 'rgba(0, 210, 255, 0.1)';
+
+            ejectBtn.onmouseenter = () => { ejectBtn.style.background = '#00d2ff'; ejectBtn.style.color = '#000'; };
+            ejectBtn.onmouseleave = () => { ejectBtn.style.background = 'rgba(0, 210, 255, 0.1)'; ejectBtn.style.color = '#00d2ff'; };
+            ejectBtn.onclick = openDedicatedPiP;
+            actionGroup.appendChild(ejectBtn);
+        }
         const closeBtn = document.createElement('div');
         closeBtn.className = 'mech-close-btn';
         closeBtn.id = 'mech-btn-close';
         closeBtn.innerText = '✕';
         closeBtn.title = t.btn_close_title + t.hint_shortcut_toggle;
         closeBtn.onclick = closeInterface;
-
-        controlsDiv.append(powerGroup, closeBtn);
+        actionGroup.appendChild(closeBtn);
+        controlsDiv.append(powerGroup, actionGroup);
 
         const visor = document.createElement('div');
         visor.className = 'visor';
+        Object.assign(visor.style, {
+            backgroundColor: '#111',
+            backgroundImage: 'linear-gradient(to bottom, #1a1a1a, #000)',
+            boxShadow: 'inset 0 0 10px #000',
+            overflow: 'hidden',
+            zIndex: '2'
+        });
         makeDraggable(container, visor);
 
         const statusDiv = document.createElement('div');
@@ -2337,27 +2139,59 @@
         statusDiv.innerHTML = `<span class="status-dot"></span><span id="mech-status-text">${t.status_ready}</span>`;
         msg = statusDiv.querySelector('#mech-status-text');
 
-        const commsBtn = document.createElement('button');
-        commsBtn.id = 'mech-comms-btn';
-        commsBtn.className = 'comms-btn';
-        commsBtn.innerHTML = `<span class="icon">📶</span> COMMS`;
-        commsBtn.title = t.ai_response_tab;
-        commsBtn.onclick = () => {
-            if (window.ccManager.streamingModal && window.ccManager.streamingModal.element) {
-                window.ccManager.streamingModal.restore();
-            } else {
-                const modal = showStreamingResponseModal("", window.ccManager.lastAiConfig);
-                if (window.ccManager.lastAiText) {
-                    modal.append(window.ccManager.lastAiText);
-                    modal.done();
-                }
-            }
-        };
 
-        visor.append(statusDiv, commsBtn);
+        if (shouldShowAI()) {
+            const commsBtn = document.createElement('button');
+            commsBtn.id = 'mech-comms-btn';
+            commsBtn.className = 'comms-btn';
+            commsBtn.innerHTML = `<span class="icon">📶</span>${t.robot_comms_tab}`;
+            commsBtn.title = t.ai_response_tab;
+            commsBtn.onclick = () => {
+                if (state.streamingModal && state.streamingModal.element) {
+                    state.streamingModal.restore();
+                } else {
+                    const ctx = state.lastAiContext || "";
+                    const cfg = state.lastAiConfig || state.aiConfig;
+                    chrome.storage.local.get(['cc_last_layout_mode'], (res) => {
+                        const savedMode = res.cc_last_layout_mode || 'single';
+                        const modal = showStreamingResponseModalMulti(ctx, cfg, savedMode);
+                        if (state.lastAiText) {
+                        }
+                    });
+                }
+            };
+            visor.append(statusDiv, commsBtn);
+        }
 
         const inputDeck = document.createElement('div');
         inputDeck.className = 'input-deck';
+
+        const mechToolbar = document.createElement('div');
+        mechToolbar.className = 'mech-sys-toolbar';
+        Object.assign(mechToolbar.style, {
+            display: 'flex', justifyContent: 'flex-end', gap: '6px',
+            marginBottom: '4px', paddingRight: '4px'
+        });
+
+        function createMechSysBtn(id, textKey, tooltipKey, promptKey, isCustom = false) {
+            const btn = createSysBtn(id, textKey, tooltipKey, promptKey);
+            btn.style.color = 'var(--mech-accent)';
+            btn.style.border = '1px solid #333';
+            btn.style.background = '#000';
+            return btn;
+        }
+
+        const mechBtnSum = createMechSysBtn('mech-sys-btn-sum', 'sys_btn_summary', 'sys_tooltip_summary', 'sys_prompt_summary');
+        const mechBtnTrans = createMechSysBtn('mech-sys-btn-trans', 'sys_btn_translate', 'sys_tooltip_translate', 'sys_prompt_translate');
+        const mechBtnExp = createMechSysBtn('mech-sys-btn-exp', 'sys_btn_explain', 'sys_tooltip_explain', 'sys_prompt_explain');
+        const mechBtnSave = createMechSysBtn('mech-btn-save', 'sys_btn_save', 'sys_tooltip_save', null);
+        mechBtnSave.onclick = (e) => { e.stopPropagation(); handleSavePromptClick(); };
+        const mechBtnLoad = createMechSysBtn('mech-btn-load', 'sys_btn_custom_user', 'sys_tooltip_load', null);
+        mechBtnLoad.textContent = '👤';
+        mechBtnLoad.onclick = (e) => { e.stopPropagation(); handleLoadPromptClick(mechBtnLoad); };
+
+        mechToolbar.append(mechBtnSum, mechBtnTrans, mechBtnExp, mechBtnSave, mechBtnLoad);
+
         const robotInput = document.createElement('textarea');
         robotInput.className = 'main-input';
         robotInput.id = 'cc-prefix-input';
@@ -2366,14 +2200,17 @@
         robotInput.addEventListener('input', calculateTotalTokens);
         prefixInput = robotInput;
 
-        const aiTrigger = document.createElement('button');
-        aiTrigger.id = 'mech-ai-trigger';
-        aiTrigger.className = 'ai-trigger-btn';
-        aiTrigger.innerText = '✨';
-        aiTrigger.title = t.btn_summary;
-        aiTrigger.onclick = handleAiSummary;
+        inputDeck.append(mechToolbar, robotInput)
 
-        inputDeck.append(robotInput, aiTrigger);
+        if (shouldShowAI()) {
+            const aiTrigger = document.createElement('button');
+            aiTrigger.id = 'mech-ai-trigger';
+            aiTrigger.className = 'ai-trigger-btn';
+            aiTrigger.innerText = '✨';
+            aiTrigger.title = t.btn_summary;
+            aiTrigger.onclick = handleAiSummary;
+            inputDeck.append(aiTrigger);
+        }
 
         const hatch = document.createElement('div');
         hatch.className = 'hatch-trigger';
@@ -2403,7 +2240,7 @@
         dropOverlay.className = 'cc-drop-overlay';
         dropOverlay.innerHTML = `
             <div style="font-size: 24px; margin-bottom: 4px;">📥</div>
-            <div style="font-size: 10px; font-weight: bold; letter-spacing:1px;">ACQUIRING DATA...</div>
+            <div class="cc-drop-text" style="font-size: 10px; font-weight: bold; letter-spacing:1px;">${t.overlay_acquiring}</div>
         `;
         Object.assign(dropOverlay.style, {
             position: 'absolute', top: '0', left: '0', width: '100%', height: '100%',
@@ -2425,6 +2262,7 @@
 
         const tools = document.createElement('div');
         tools.className = 'basket-tools';
+        tools.id = 'mech-basket-toolbar';
         const btnAdd = document.createElement('button'); btnAdd.className = 'tiny-btn'; btnAdd.innerText = t.btn_add_basket; btnAdd.onclick = handleAddToBasket; btnAdd.id = 'mech-basket-add';
         const btnPaste = document.createElement('button'); btnPaste.className = 'tiny-btn'; btnPaste.innerText = t.btn_paste_basket; btnPaste.onclick = handlePasteBasket; btnPaste.id = 'mech-basket-paste';
         const btnNewDoc = document.createElement('button'); btnNewDoc.className = 'tiny-btn'; btnNewDoc.id = 'mech-basket-new'; btnNewDoc.innerText = t.btn_new_doc; btnNewDoc.onclick = handleNewDoc;
@@ -2446,10 +2284,12 @@
 
         const thrusters = document.createElement('div');
         thrusters.className = 'thruster-pack';
+        thrusters.id = 'mech-thrusters';
         PLATFORMS.forEach(p => {
             const btn = document.createElement('div');
             btn.className = 'thruster-btn';
             btn.innerHTML = `<i>${p.icon}</i> ${p.name}`;
+            btn.title = t.tooltip_transfer_to.replace('{name}', p.name);
             btn.onclick = () => handleCrossTransfer(p);
             thrusters.appendChild(btn);
         });
@@ -2464,6 +2304,7 @@
         container.addEventListener('dragover', (e) => {
             if (e.dataTransfer.types.includes('application/cc-sort')) return;
             e.preventDefault();
+            e.stopPropagation();
             e.dataTransfer.dropEffect = 'copy';
 
             if (!container.classList.contains('deployed')) {
@@ -2484,47 +2325,57 @@
         container.addEventListener('drop', (e) => {
             dropOverlay.style.display = 'none';
             basketContainer.style.boxShadow = '';
-
+            const curT = LANG_DATA[state.lang];
             if (e.dataTransfer.types && e.dataTransfer.types.includes('application/cc-sort')) return;
             e.preventDefault();
+            e.stopPropagation();
             const files = e.dataTransfer.files;
             if (files && files.length > 0) {
+                const MAX_FILE_SIZE = 10 * 1024 * 1024;
                 Array.from(files).forEach((file) => {
-                    if (file.type && file.type.includes('text') || /\.md$/i.test(file.name) || /\.txt$/i.test(file.name) || /\.js$/i.test(file.name) || /\.py$/i.test(file.name)) {
+                    if (file.size > MAX_FILE_SIZE) {
+                        showToast(`❌ File too large: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)}MB). Max 10MB.`);
+                        return;
+                    }
+                    if ((file.type && file.type.includes('text/plain')) ||
+                        /\.(md|txt|js|py|html|css|json)$/i.test(file.name)) {
+
                         const reader = new FileReader();
                         reader.onload = (ev) => {
                             const content = (ev.target.result || '').trim();
                             if (!content) return;
-                            getBasket((basket) => {
-                                basket.push({
+
+                            basketOp({
+                                kind: 'ADD',
+                                item: {
                                     text: content,
                                     timestamp: Date.now(),
-                                    source: file.name + " (File)"
-                                });
-                                chrome.storage.local.set({ 'cc_basket': basket }, () => {
-                                    showToast("File loaded: " + file.name);
-                                    updateBasketUI();
-                                });
+                                    source: file.name + (curT.src_file || " (File)")
+                                }
+                            }, () => {
+                                showToast("File loaded: " + file.name);
+                                cleanUpSiteOverlays();
                             });
                         };
                         reader.readAsText(file);
                     }
                 });
+
                 return;
             }
 
-            const text = e.dataTransfer.getData('text');
+            const text = e.dataTransfer.getData('text/plain');
             if (text && text.trim().length > 0) {
-                getBasket((basket) => {
-                    basket.push({
+                basketOp({
+                    kind: 'ADD',
+                    item: {
                         text: text.trim(),
                         timestamp: Date.now(),
-                        source: window.location.hostname + " (Drop)"
-                    });
-                    chrome.storage.local.set({ 'cc_basket': basket }, () => {
-                        showToast(LANG_DATA[window.ccManager.lang].toast_basket_add || "Data Acquired 📥");
-                        updateBasketUI();
-                    });
+                        source: window.location.hostname + curT.src_drop
+                    }
+                }, () => {
+                    showToast(curT.toast_basket_add || "Data Acquired 📥");
+                    updateBasketUI();
                 });
             }
         });
@@ -2534,92 +2385,115 @@
         updateUITexts();
     }
 
-    function openRobotSettings() {
-        if (document.querySelector('.mech-config-overlay')) return;
+    function openRobotSettings(initialConfig = null, onSaveCallback = null, targetDoc = document) {
+        if (!state.isUnlocked) {
+            showFeatureUnlockModal();
+            return;
+        }
+        if (targetDoc.querySelector('.mech-config-overlay')) return;
 
-        const t = LANG_DATA[window.ccManager.lang];
-        const config = window.ccManager.aiConfig || {};
-        const MODEL_PRESETS = {
-            'openai': [
-                'gpt-4o-mini', 'gpt-3.5-turbo', 'gpt-4.1-mini',
-                'gpt-4o', 'o1', 'gpt-4.1'
-            ],
+        const t = LANG_DATA[state.lang];
+        const currentConfig = initialConfig || state.aiConfig || {};
+        const allConfigs = state.allAiConfigs || [];
 
-            'claude': [
-                'claude-3-haiku', 'claude-3-sonnet', 'claude-3.5-haiku',
-                'claude-3.5-sonnet', 'claude-3-opus', 'claude-3.5-opus'
-            ],
-
-            'gemini': [
-                'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro',
-                'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-pro'
-            ],
-
-            'grok': [
-                'grok-2-mini', 'grok-2', 'grok-3-mini',
-                'grok-3', 'grok-4', 'grok-4-fast'
-            ],
-
-            'local': ['llama3', 'mistral', 'gemma']
-        };
-
-        const overlay = document.createElement('div');
+        const overlay = targetDoc.createElement('div');
         overlay.className = 'mech-config-overlay';
-        const card = document.createElement('div');
+        Object.assign(overlay.style, {
+            position: 'fixed', top: '0', left: '0', width: '100%', height: '100%',
+            background: 'rgba(0, 0, 0, 0.8)', backdropFilter: 'blur(4px)',
+            zIndex: '2147483660', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            opacity: '0', animation: 'fadeIn 0.3s forwards'
+        });
+        const card = targetDoc.createElement('div');
         card.className = 'mech-config-card';
+        if (targetDoc !== document) {
+            card.style.width = '90%';
+            card.style.transform = 'scale(0.9)';
+        }
+
+        const profileOptions = allConfigs.map(c =>
+            `<option value="${escapeHTML(c.name)}" ${currentConfig.name === c.name ? 'selected' : ''}>${escapeHTML(c.name)} (${escapeHTML(c.provider)})</option>`
+        ).join('');
 
         card.innerHTML = `
             <div class="mech-config-header">
-                <span>// NEURAL UPLINK CONFIG</span>
-                <span style="font-size:12px; opacity:0.7">oAo</span>
+                <span>${t.mech_header}</span>
+                <span style="font-size:12px; opacity:0.7">${t.mech_sub}</span>
+            </div>
+
+            <div class="mech-field" style="background:rgba(0,0,0,0.3); padding:10px; border:1px dashed var(--mech-border); margin-bottom:15px;">
+                <span class="mech-label" style="color:var(--mech-accent);">${t.label_load_profile}</span>
+                <div style="display:flex; gap:6px;">
+                    <select id="mech-saved-profiles" class="mech-select" style="flex:1;">
+                        <option value="__new__">${t.option_new_profile}</option>
+                        ${profileOptions}
+                    </select>
+                </div>
             </div>
             
             <div class="mech-field">
+                <span class="mech-label">${t.label_config_name}</span>
+                <input type="text" id="mech-config-name" class="mech-input" placeholder="${t.ph_config_name}" value="${escapeHTML(currentConfig.name || 'Default')}">
+            </div>
+
+            <div class="mech-field">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span class="mech-label">UPLINK PROVIDER</span>
-                    <span id="mech-endpoint-toggle" style="font-size:10px; cursor:pointer; color:var(--mech-accent); letter-spacing:1px; opacity:0.8;">[ EDIT ENDPOINT ]</span>
+                    <span class="mech-label">${t.label_ai_provider}</span>
+                    <span id="mech-endpoint-toggle" style="font-size:10px; cursor:pointer; color:var(--mech-accent); letter-spacing:1px; opacity:0.8;">${t.mech_edit_ep}</span>
                 </div>
                 <select id="mech-provider" class="mech-select">
                     <option value="openai">OpenAI (ChatGPT)</option>
                     <option value="claude">Anthropic (Claude)</option>
                     <option value="gemini">Google (Gemini)</option>
                     <option value="grok">xAI (Grok)</option>
-                    <option value="local">Local (Ollama/LM Studio)</option>
+                    <option value="ollama">Local (Ollama)</option>
+                    <option value="lm-studio">Local (LM Studio)</option>
                 </select>
             </div>
 
             <div class="mech-field" id="field-key">
-                <span class="mech-label">ACCESS KEY (ENCRYPTED)</span>
-                <input type="password" id="mech-key" class="mech-input" placeholder="sk-...">
+                <span class="mech-label">${t.label_api_key}</span>
+                <input type="password" id="mech-key" class="mech-input" placeholder="${t.ph_api_key}" autocomplete="new-password" data-lpignore="true" aria-label="AI Service API Key">
             </div>
 
             <div class="mech-field" id="field-endpoint" style="display:none;">
-                <span class="mech-label">TARGET ENDPOINT (URL)</span>
+                <span class="mech-label">${t.label_endpoint}</span>
                 <input type="text" id="mech-endpoint" class="mech-input" placeholder="e.g. https://generativelanguage.googleapis.com...">
                 <div style="font-size:9px; color:#666; margin-top:4px;">* Leave empty to use auto-generated default URL</div>
             </div>
 
             <div class="mech-field">
-                <span class="mech-label">TARGET MODEL</span>
+                <span class="mech-label">${t.label_target_model}</span>
                 <div style="display:flex; gap:6px;">
                     <select id="mech-model-select" class="mech-select" style="width:30px; padding:0 4px; flex:0 0 auto; text-align:center;">
                         <option value="">▼</option>
                     </select>
-                    <input type="text" id="mech-model" class="mech-input" placeholder="e.g. gpt-4o" style="flex:1;">
+                    <input type="text" id="mech-model" class="mech-input" placeholder="${t.ph_model}" style="flex:1;">
                 </div>
             </div>
 
             <div class="mech-deco-line"></div>
 
             <div class="mech-btn-group">
-                <button id="mech-cancel" class="mech-cancel-btn">ABORT</button>
-                <button id="mech-save" class="mech-action-btn">ESTABLISH LINK</button>
+                <button id="mech-cancel" class="mech-cancel-btn">${t.btn_abort || 'ABORT'}</button>
+                <button id="mech-save" class="mech-action-btn">${t.ai_save || 'SAVE CONFIG'}</button>
+            </div>
+
+            <div style="display:flex; gap:10px; margin-top:15px; border-top:1px dashed var(--mech-border); padding-top:10px; opacity:0.7;">
+                <button id="mech-export" style="flex:1; background:transparent; border:none; color:var(--mech-text-dim); font-size:10px; cursor:pointer; text-transform:uppercase; letter-spacing:1px;">
+                    [ ${t.btn_export_json} ]
+                </button>
+                <button id="mech-import" style="flex:1; background:transparent; border:none; color:var(--mech-text-dim); font-size:10px; cursor:pointer; text-transform:uppercase; letter-spacing:1px;">
+                    [ ${t.btn_import_json} ]
+                </button>
             </div>
         `;
 
         overlay.appendChild(card);
-        document.body.appendChild(overlay);
+        targetDoc.body.appendChild(overlay);
 
+        const profileSelect = card.querySelector('#mech-saved-profiles');
+        const nameInput = card.querySelector('#mech-config-name');
         const providerSel = card.querySelector('#mech-provider');
         const fieldKey = card.querySelector('#field-key');
         const keyInput = card.querySelector('#mech-key');
@@ -2630,78 +2504,68 @@
         const btnSave = card.querySelector('#mech-save');
         const btnCancel = card.querySelector('#mech-cancel');
         const epToggle = card.querySelector('#mech-endpoint-toggle');
+        const btnExport = card.querySelector('#mech-export');
+        const btnImport = card.querySelector('#mech-import');
 
-        providerSel.value = config.provider || 'openai';
-        keyInput.value = config.apiKey || '';
-        endpointInput.value = config.endpoint || '';
-        modelInput.value = config.model || '';
-
-        const updateModelList = async (provider) => {
-            modelSelect.innerHTML = '<option value="">Loading...</option>';
-            let models = MODEL_PRESETS[provider] || [];
-            if (provider === 'local') {
-                try {
-                    const response = await new Promise(resolve => {
-                        chrome.runtime.sendMessage({ action: "GET_OLLAMA_MODELS" }, resolve);
-                    });
-
-                    if (response && response.success && response.models.length > 0) {
-                        models = response.models;
-                    } else {
-                        const opt = document.createElement('option');
-                        opt.value = "";
-                        opt.textContent = "⚠️ Connection failed (check Ollama)";
-                        opt.disabled = true;
-                        modelSelect.appendChild(opt);
-                    }
-                } catch (e) {
-                    console.warn("Local model fetch failed", e);
-                }
-            }
-
-            modelSelect.innerHTML = '<option value="">▼</option>';
-            models.forEach(m => {
-                const opt = document.createElement('option');
-                opt.value = m;
-                opt.textContent = m;
-                modelSelect.appendChild(opt);
+        btnExport.onclick = () => {
+            chrome.storage.local.get(['cc_all_ai_configs', 'cc_ai_config', 'cc_active_ai_config_name'], (data) => {
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `cc-mech-config-${new Date().toISOString().slice(0, 10)}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
             });
         };
 
-        epToggle.onclick = () => {
-            const isHidden = fieldEndpoint.style.display === 'none';
-            fieldEndpoint.style.display = isHidden ? 'block' : 'none';
-            epToggle.innerText = isHidden ? '[ HIDE ENDPOINT ]' : '[ EDIT ENDPOINT ]';
-            epToggle.style.color = isHidden ? '#fff' : 'var(--mech-accent)';
+        btnImport.onclick = () => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.onchange = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    try {
+                        const json = JSON.parse(ev.target.result);
+                        if (json.cc_all_ai_configs) {
+                            const isZh = state.lang === 'zh';
+                            const title = isZh ? '匯入設定?' : 'Import Config?';
+                            const msg = isZh ? '這將覆蓋目前的系統設定，確定嗎?' : 'This will overwrite current system config. Proceed?';
+                            showMainConfirmModal(title, msg, () => {
+                                chrome.storage.local.set(json, () => {
+                                    state.allAiConfigs = json.cc_all_ai_configs || [];
+                                    let active = json.cc_ai_config;
+                                    if (!active && json.cc_active_ai_config_name) {
+                                        active = state.allAiConfigs.find(c => c.name === json.cc_active_ai_config_name);
+                                    }
+                                    if (!active && state.allAiConfigs.length > 0) active = state.allAiConfigs[0];
+                                    state.aiConfig = active || {};
+                                    showToast(t.msg_import_success);
+                                    overlay.remove();
+                                    if (typeof loadAiConfig === 'function') loadAiConfig();
+                                    openRobotSettings();
+                                });
+                            });
+                        } else {
+                            showToast("DATA CORRUPTED (Invalid JSON)");
+                        }
+                    } catch (err) {
+                        console.error(err);
+                        showToast("READ ERROR");
+                    }
+                };
+                reader.readAsText(file);
+            };
+            input.click();
         };
 
-        const updateUIState = (isInit = false) => {
+        const updateUIState = () => {
             const val = providerSel.value;
-
-            if (!isInit) {
-                let defEp = '';
-                let defModel = MODEL_PRESETS[val] ? MODEL_PRESETS[val][0] : '';
-
-                if (val === 'openai') {
-                    defEp = 'https://api.openai.com/v1/chat/completions';
-                }
-                else if (val === 'gemini') {
-                    defEp = `https://generativelanguage.googleapis.com/v1beta/models/${defModel}:streamGenerateContent`;
-                }
-                else if (val === 'claude') {
-                    defEp = 'https://api.anthropic.com/v1/messages';
-                }
-                else if (val === 'grok') {
-                    defEp = 'https://api.x.ai/v1/chat/completions';
-                }
-                else if (val === 'local') {
-                    defEp = 'http://localhost:11434/api/chat';
-                }
-
-                endpointInput.value = defEp;
-                modelInput.value = defModel;
-            }
-
             if (val === 'local') {
                 fieldKey.style.display = 'none';
                 fieldEndpoint.style.display = 'block';
@@ -2709,122 +2573,156 @@
             } else {
                 fieldKey.style.display = 'block';
                 epToggle.style.display = 'block';
+            }
+        };
 
-                if (isInit && config.endpoint && config.endpoint.trim() !== '') {
-                    fieldEndpoint.style.display = 'block';
-                    epToggle.innerText = '[ HIDE ENDPOINT ]';
+        async function updateModelList(provider) {
+            if (!modelSelect) return;
+            modelSelect.innerHTML = `<option value="">...</option>`;
+            let models = MODEL_PRESETS[provider] || [];
+
+            if (provider === 'local' || provider === 'ollama' || provider === 'lm-studio') {
+                try {
+                    let defaultPort = '11434';
+                    if (provider === 'lm-studio') defaultPort = '1234';
+                    const currentEndpoint = endpointInput.value || `http://localhost:${defaultPort}`;
+                    const response = await new Promise(resolve =>
+                        chrome.runtime.sendMessage({
+                            action: "GET_LOCAL_MODELS",
+                            provider: provider,
+                            endpoint: currentEndpoint
+                        }, resolve)
+                    );
+
+                    if (response && response.success) models = response.models;
+                } catch (e) {
+                    console.error("Model fetch error:", e);
                 }
             }
-            updateModelList(val);
+
+            modelSelect.innerHTML = '<option value="">▼</option>';
+            models.forEach(m => {
+                const opt = document.createElement('option');
+                const val = m.id || m;
+                opt.value = val;
+                opt.textContent = val;
+                modelSelect.appendChild(opt);
+            });
+        }
+
+        const fillForm = (cfg) => {
+            nameInput.value = cfg.name || '';
+            providerSel.value = cfg.provider || 'openai';
+            keyInput.value = cfg.apiKey || '';
+            endpointInput.value = cfg.endpoint || '';
+            modelInput.value = cfg.model || '';
+            updateUIState();
+            updateModelList(providerSel.value);
+        };
+        fillForm(currentConfig);
+        profileSelect.onchange = () => {
+            const selectedName = profileSelect.value;
+            if (selectedName === '__new__') fillForm({ name: 'New Config', provider: 'openai' });
+            else {
+                const cfg = allConfigs.find(c => c.name === selectedName);
+                if (cfg) fillForm(cfg);
+            }
+        };
+
+        epToggle.onclick = () => {
+            const isHidden = fieldEndpoint.style.display === 'none';
+            fieldEndpoint.style.display = isHidden ? 'block' : 'none';
+            epToggle.innerText = isHidden ? t.mech_hide_ep : t.mech_edit_ep;
+            epToggle.style.color = isHidden ? '#fff' : 'var(--mech-accent)';
         };
 
         providerSel.addEventListener('change', async () => {
             updateUIState(false);
+            let defEp = '';
+            let defModel = MODEL_PRESETS[providerSel.value] ? MODEL_PRESETS[providerSel.value][0] : '';
+            if (providerSel.value === 'openai') defEp = 'https://api.openai.com/v1/chat/completions';
+            else if (providerSel.value === 'gemini') defEp = `https://generativelanguage.googleapis.com/v1beta/models/${defModel}:streamGenerateContent`;
+            else if (providerSel.value === 'claude') defEp = 'https://api.anthropic.com/v1/messages';
+            else if (providerSel.value === 'grok') defEp = 'https://api.x.ai/v1/chat/completions';
+            else if (providerSel.value === 'local') defEp = 'http://localhost:11434/api/chat';
+
+            endpointInput.value = defEp;
+            modelInput.value = defModel;
             await updateModelList(providerSel.value);
-            if (providerSel.value === 'local' && modelSelect.options.length > 1) {
-                modelInput.value = modelSelect.options[1].value;
-                modelInput.style.borderColor = 'var(--mech-accent)';
-                setTimeout(() => modelInput.style.borderColor = '', 300);
-            }
         });
+
         modelSelect.addEventListener('change', () => {
             if (modelSelect.value) {
                 modelInput.value = modelSelect.value;
                 if (providerSel.value === 'gemini') {
                     endpointInput.value = `https://generativelanguage.googleapis.com/v1beta/models/${modelSelect.value}:streamGenerateContent`;
                 }
-                modelInput.style.borderColor = 'var(--mech-accent)';
-                setTimeout(() => modelInput.style.borderColor = '', 300);
-            }
-        });
-
-        modelInput.addEventListener('input', () => {
-            if (providerSel.value === 'gemini') {
-                const typedModel = modelInput.value.trim();
-                if (typedModel) {
-                    endpointInput.value = `https://generativelanguage.googleapis.com/v1beta/models/${typedModel}:streamGenerateContent`;
-                }
             }
         });
 
         updateUIState(true);
-        updateModelList(config.provider || 'openai');
-
         btnSave.onclick = () => {
             const provider = providerSel.value;
             const finalEndpoint = endpointInput.value.trim();
             const finalKey = (provider === 'local') ? '' : keyInput.value.trim();
             const finalModel = modelInput.value.trim();
+            const configName = nameInput.value.trim() || 'Custom Config';
 
             const newConfig = {
                 configured: true,
+                name: configName,
                 provider: provider,
                 endpoint: finalEndpoint,
                 apiKey: finalKey,
                 model: finalModel
             };
 
-            btnSave.innerText = "LINKING...";
-            btnSave.style.opacity = "0.7";
+            btnSave.innerText = t.ai_save_indicator_saving || "SAVING...";
 
-            chrome.storage.local.set({ 'cc_ai_config': newConfig }, () => {
-                window.ccManager.aiConfig = newConfig;
+            chrome.storage.local.get(['cc_all_ai_configs'], (result) => {
+                let latestAllConfigs = result.cc_all_ai_configs || [];
 
-                if (window.ccManager.streamingModal && window.ccManager.streamingModal.element) {
-                    const headerTitle = window.ccManager.streamingModal.element.querySelector('.cc-modal-header div');
-                    if (headerTitle) {
-                        const baseText = `🤖 ${t.ai_modal_title}`;
-                        headerTitle.textContent = '';
-                        headerTitle.append(document.createTextNode(baseText));
-
-                        const small = document.createElement('small');
-                        small.style.cssText = "font-weight:normal; opacity:0.7; margin-left:8px; font-size:11px; background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:4px;";
-                        small.textContent = `${provider} · ${finalModel}`;
-                        headerTitle.append(small);
-                    }
+                const existingIndex = latestAllConfigs.findIndex(c => c.name === configName);
+                if (existingIndex >= 0) {
+                    latestAllConfigs[existingIndex] = newConfig;
+                } else {
+                    latestAllConfigs.push(newConfig);
                 }
 
-                setTimeout(() => {
-                    btnSave.innerText = "LINK ESTABLISHED";
-                    btnSave.style.background = "#fff";
-                    btnSave.style.color = "#000";
+                chrome.storage.local.set({
+                    'cc_all_ai_configs': latestAllConfigs,
+                    'cc_ai_config': newConfig,
+                    'cc_active_ai_config_name': configName
+                }, () => {
+                    state.allAiConfigs = latestAllConfigs;
+                    state.aiConfig = newConfig;
 
+                    btnSave.innerText = t.ai_save_indicator_saved || "SAVED";
                     setTimeout(() => {
-                        overlay.style.opacity = '0';
-                        setTimeout(() => overlay.remove(), 300);
-                    }, 600);
-                }, 500);
+                        overlay.remove();
+                        if (onSaveCallback) onSaveCallback(newConfig);
+                        if (typeof loadAiConfig === 'function') loadAiConfig();
+                    }, 500);
+                });
             });
         };
 
-        btnCancel.onclick = () => {
-            overlay.style.opacity = '0';
-            setTimeout(() => overlay.remove(), 300);
-        };
+        btnCancel.onclick = () => overlay.remove();
 
-        const protectInput = (el) => {
-            el.onmousedown = (e) => e.stopPropagation();
-            el.onmouseup = (e) => e.stopPropagation();
-            el.onclick = (e) => e.stopPropagation();
-            el.ondblclick = (e) => e.stopPropagation();
-        };
+        let isMouseDownOnOverlay = false;
 
-        protectInput(endpointInput);
-        protectInput(keyInput);
-        protectInput(modelInput);
         card.onmousedown = (e) => e.stopPropagation();
         card.onclick = (e) => e.stopPropagation();
-        let mouseDownTarget = null;
 
         overlay.onmousedown = (e) => {
-            mouseDownTarget = e.target;
+            if (e.target === overlay) isMouseDownOnOverlay = true;
         };
 
-        overlay.onclick = (e) => {
-            if (e.target === overlay && mouseDownTarget === overlay) {
-                btnCancel.click();
+        overlay.onmouseup = (e) => {
+            if (e.target === overlay && isMouseDownOnOverlay) {
+                overlay.remove();
             }
-            mouseDownTarget = null;
+            isMouseDownOnOverlay = false;
         };
     }
 
@@ -2832,16 +2730,13 @@
         const hatch = document.getElementById('mech-hatch-trigger');
         const panel = document.getElementById('cc-robot-panel');
         if (!hatch || !panel) return;
-        const t = LANG_DATA[window.ccManager.lang];
-        if (typeof count === 'undefined') {
-        }
-
+        const t = LANG_DATA[state.lang];
         const isDeployed = panel.classList.contains('deployed');
         const textExpand = t.hatch_expand || "▼ DEPLOY BASKET";
         const textRetract = t.hatch_retract || "▲ RETRACT BASKET";
         const baseText = isDeployed ? textRetract : textExpand;
 
-        if (typeof count === 'number') {
+        if (typeof count === 'number' && count > 0) {
             hatch.innerText = `${baseText} (${count}) ${isDeployed ? '▲' : '▼'}`;
         } else {
             hatch.innerText = `${baseText} ${isDeployed ? '▲' : '▼'}`;
@@ -2862,12 +2757,12 @@
         document.getElementById('cc-tooltip')?.remove();
 
         if (mode) {
-            window.ccManager.uiMode = mode;
+            state.uiMode = mode;
         } else {
-            window.ccManager.uiMode = (window.ccManager.uiMode === 'robot') ? 'standard' : 'robot';
+            state.uiMode = (state.uiMode === 'robot') ? 'standard' : 'robot';
         }
 
-        if (window.ccManager.uiMode === 'robot') {
+        if (state.uiMode === 'robot') {
             createRobotPanel();
         } else {
             createPanel();
@@ -2888,6 +2783,25 @@
             setTimeout(() => {
                 newPanel.classList.add('cc-visible');
             }, 10);
+
+            updateBasketUI((basket) => {
+                const hasItems = basket && basket.length > 0;
+
+                if (state.uiMode === 'standard' && hasItems) {
+                    const stdPanel = document.getElementById('cc-panel');
+                    if (stdPanel) {
+                        stdPanel.classList.add('expanded');
+                        toggleBasketPreview(true);
+                    }
+                }
+                else if (state.uiMode === 'robot' && hasItems) {
+                    const robotPanel = document.getElementById('cc-robot-panel');
+                    if (robotPanel && !robotPanel.classList.contains('deployed')) {
+                        robotPanel.classList.add('deployed');
+                        updateRobotBasketText(basket.length);
+                    }
+                }
+            });
         }
     }
 
@@ -2921,46 +2835,370 @@
         document.addEventListener('mouseup', () => {
             if (isDragging) {
                 isDragging = false;
+                if (element.id === 'cc-panel' || element.id === 'cc-robot-panel') {
+                    const rect = element.getBoundingClientRect();
+                    chrome.storage.local.set({
+                        'cc_drone_position': { top: rect.top, left: rect.left }
+                    });
+                }
             }
         });
     }
 
-    window.renderResponsePanel = function (container) {
+    function renderCompactSettings(container) {
+        if (!state.isUnlocked) {
+            const drawer = document.getElementById('cc-ai-drawer-panel');
+            if (drawer) drawer.classList.remove('open');
+            const aiTab = document.querySelector('.cc-ai-tab');
+            if (aiTab) aiTab.classList.remove('active');
+            showFeatureUnlockModal();
+            return;
+        }
+        if (!container) container = document.querySelector('.cc-ai-content');
         if (!container) return;
-        const t = LANG_DATA[window.ccManager.lang];
+
+        const currentConfig = state.aiConfig || {};
+        const allConfigs = state.allAiConfigs || [];
+        const t = LANG_DATA[state.lang];
+
+        const profileOptions = allConfigs.map(c =>
+            `<option value="${escapeHTML(c.name)}" ${currentConfig.name === c.name ? 'selected' : ''}>${escapeHTML(c.name)} (${c.provider})</option>`
+        ).join('');
 
         container.innerHTML = `
-            <div style="height:100%; display:flex; flex-direction:column; padding:10px 4px;">
-                <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-weight:bold; font-size:13px; border-bottom:1px solid var(--cc-border); padding-bottom:6px;">
-                    <span>🤖 AI Response</span>
-                    <span id="btn-close-drawer" style="cursor:pointer; opacity:0.6; font-size:14px;">✕</span>
+                <div style="height:100%; display:flex; flex-direction:column; padding:10px 4px;">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:12px; font-weight:bold; font-size:13px; border-bottom:1px solid var(--cc-border); padding-bottom:6px;">
+                        <span>⚙️ ${t.ai_config_title}</span>
+                        <span id="btn-close-drawer-compact" style="cursor:pointer; opacity:0.6; font-size:14px;">✕</span>
+                    </div>
+
+                    <div style="flex:1; display:flex; flex-direction:column; gap:10px; overflow-y:auto; padding-right:2px;">
+                        
+                        <div style="background:rgba(0,0,0,0.05); padding:8px; border-radius:6px; border:1px dashed var(--cc-border);">
+                            <label style="font-size:10px; color:var(--cc-text-sub); display:block; margin-bottom:2px;">${t.label_load_profile}</label>
+                            <select id="drawer-saved-profiles" class="cc-input" style="height:28px !important; margin:0;">
+                                <option value="__new__">${t.option_new_profile}</option>
+                                ${profileOptions}
+                            </select>
+                        </div>
+
+                        <div>
+                            <label style="font-size:10px; color:var(--cc-text-sub); display:block; margin-bottom:2px;">${t.label_config_name}</label>
+                            <input type="text" id="drawer-config-name" class="cc-input" ... value="${escapeHTML(currentConfig.name || 'Default')}">
+                        </div>
+
+                        <div>
+                            <label style="font-size:10px; color:var(--cc-text-sub); display:block; margin-bottom:2px;">${t.label_ai_provider}</label>
+                            <select id="drawer-ai-provider" class="cc-input" style="height:28px !important; margin:0;">
+                                <option value="openai">OpenAI (ChatGPT)</option>
+                                <option value="claude">Anthropic (Claude)</option>
+                                <option value="gemini">Google (Gemini)</option>
+                                <option value="grok">xAI (Grok)</option>
+                                <option value="ollama">Local (Ollama)</option>
+<option value="lm-studio">Local (LM Studio)</option>
+                            </select>
+                        </div>
+
+                        <div id="field-key-container">
+                            <label style="font-size:10px; color:var(--cc-text-sub); display:block; margin-bottom:2px;">${t.label_api_key}</label>
+                            <input type="password" id="drawer-ai-key" class="cc-input" style="height:28px !important; margin:0;" placeholder="${t.ph_api_key}" autocomplete="new-password" data-lpignore="true">
+                        </div>
+
+                        <div>
+                            <label style="font-size:10px; color:var(--cc-text-sub); display:block; margin-bottom:2px;">${t.label_target_model}</label>
+                            <div style="display:flex; gap:6px;">
+                                <select id="drawer-ai-model-select" class="cc-input" style="width:24px; padding:0 4px; flex:0 0 auto; cursor:pointer;" title="Quick Select">
+                                    <option value="">▼</option>
+                                </select>
+                                <input type="text" id="drawer-ai-model" class="cc-input" style="height:28px !important; margin:0; flex:1;" placeholder="${t.ph_model}">
+                            </div>
+                        </div>
+
+                        <div>
+                            <div id="toggle-advanced" style="font-size:10px; color:var(--cc-text-sub); cursor:pointer; display:flex; align-items:center; gap:4px;">
+                                <span>▶</span> ${t.ai_endpoint_toggle || t.label_endpoint}
+                            </div>
+                            <input type="text" id="drawer-ai-endpoint" class="cc-input" 
+                                style="display:none; height:28px !important; margin-top:4px; font-size:11px;" 
+                                placeholder="https://api...">
+                        </div>
+                    </div>
+
+                    <button id="drawer-save" style="margin-top:12px; width:100%; background:var(--cc-primary); color:#fff; border:none; padding:8px; border-radius:6px; font-weight:bold; cursor:pointer;">
+                        ${t.ai_save}
+                    </button>
+                    
+                    <div style="display:flex; gap:8px; margin-top:8px;">
+                        <button id="drawer-export" style="flex:1; background:transparent; border:1px solid var(--cc-border); color:var(--cc-text-sub); padding:6px; border-radius:4px; font-size:10px; cursor:pointer;">
+                            ${t.btn_export_json}
+                        </button>
+                        <button id="drawer-import" style="flex:1; background:transparent; border:1px solid var(--cc-border); color:var(--cc-text-sub); padding:6px; border-radius:4px; font-size:10px; cursor:pointer;">
+                            ${t.btn_import_json}
+                        </button>
+                    </div>
                 </div>
+            `;
 
-                <div id="cc-streaming-area" style="flex:1; overflow-y:auto; font-size:12px; line-height:1.6; white-space:pre-wrap; background:rgba(0,0,0,0.1); padding:8px; border-radius:6px; margin-bottom:8px;"></div>
+        const profileSelect = container.querySelector('#drawer-saved-profiles');
+        const nameInput = container.querySelector('#drawer-config-name');
+        const providerSel = container.querySelector('#drawer-ai-provider');
+        const keyContainer = container.querySelector('#field-key-container');
+        const keyInput = container.querySelector('#drawer-ai-key');
+        const epInput = container.querySelector('#drawer-ai-endpoint');
+        const modelInput = container.querySelector('#drawer-ai-model');
+        const modelSelect = container.querySelector('#drawer-ai-model-select');
+        const advToggle = container.querySelector('#toggle-advanced');
+        const btnSave = container.querySelector('#drawer-save');
+        const btnExport = container.querySelector('#drawer-export');
+        const btnImport = container.querySelector('#drawer-import');
 
-                <div id="cc-response-actions" style="display:flex; gap:6px; flex-wrap:wrap;">
-                    <button id="btn-copy-res" style="flex:1; padding:6px; background:var(--cc-btn-bg); border:1px solid var(--cc-border); border-radius:4px; cursor:pointer;">Copy</button>
-                    <button id="btn-clear-res" style="flex:1; padding:6px; background:var(--cc-btn-bg); border:1px solid var(--cc-border); border-radius:4px; cursor:pointer;">Clear</button>
-                </div>
-            </div>
-        `;
-        const streamArea = container.querySelector('#cc-streaming-area');
-        streamArea.textContent = window.ccManager.lastAiText || "Waiting for request...";
+        const updateUIState = () => {
+            const val = providerSel.value;
+            if (val === 'ollama' || val === 'lm-studio') {
+                keyContainer.style.display = 'none';
+                epInput.style.display = 'block';
+                advToggle.style.display = 'none';
+            } else {
+                keyContainer.style.display = 'block';
+                advToggle.style.display = 'flex';
+                if (epInput.value && epInput.value.trim() !== '') {
+                    epInput.style.display = 'block';
+                    advToggle.querySelector('span').innerText = '▼';
+                } else {
+                    epInput.style.display = 'none';
+                    advToggle.querySelector('span').innerText = '▶';
+                }
+            }
+        };
 
-        container.querySelector('#btn-close-drawer').onclick = () => {
+        btnExport.onclick = () => {
+            chrome.storage.local.get(['cc_all_ai_configs', 'cc_ai_config', 'cc_active_ai_config_name'], (data) => {
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `cc-config-${new Date().toISOString().slice(0, 10)}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            });
+        };
+
+        btnImport.onclick = () => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.onchange = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    try {
+                        const json = JSON.parse(ev.target.result);
+                        if (json.cc_all_ai_configs) {
+                            const isZh = state.lang === 'zh';
+                            const title = isZh ? '匯入設定?' : 'Import Config?';
+                            const msg = isZh ? '這將覆蓋目前的設定，確定嗎?' : 'This will overwrite current configs. Proceed?';
+                            showMainConfirmModal(title, msg, () => {
+                                chrome.storage.local.set(json, () => {
+                                    state.allAiConfigs = json.cc_all_ai_configs || [];
+                                    let active = json.cc_ai_config;
+                                    if (!active && json.cc_active_ai_config_name) {
+                                        active = state.allAiConfigs.find(c => c.name === json.cc_active_ai_config_name);
+                                    }
+                                    if (!active && state.allAiConfigs.length > 0) active = state.allAiConfigs[0];
+                                    state.aiConfig = active || {};
+                                    showToast(t.msg_import_success);
+                                    if (typeof loadAiConfig === 'function') loadAiConfig();
+                                    renderCompactSettings(container);
+                                });
+                            });
+                        } else {
+                            showToast(t.msg_import_fail);
+                        }
+                    } catch (err) {
+                        console.error(err);
+                        showToast(t.msg_import_fail);
+                    }
+                };
+                reader.readAsText(file);
+            };
+            input.click();
+        };
+
+        const updateModelList = async (provider) => {
+            if (!modelSelect) return;
+            modelSelect.innerHTML = `<option value="">${t.option_loading}</option>`;
+            let models = MODEL_PRESETS[provider] || [];
+
+            if (provider === 'ollama' || provider === 'lm-studio') {
+                try {
+                    const currentEndpoint = epInput ? epInput.value : '';
+                    const response = await new Promise(resolve => {
+                        chrome.runtime.sendMessage({
+                            action: "GET_LOCAL_MODELS",
+                            provider: provider,
+                            endpoint: currentEndpoint
+                        }, resolve);
+                    });
+
+                    if (response && response.success && response.models.length > 0) {
+                        models = response.models;
+                        if (response.activeEndpoint && epInput) {
+                            if (response.activeEndpoint.includes('1234') && !epInput.value.includes('1234')) {
+                                epInput.value = `${response.activeEndpoint}/v1/chat/completions`;
+                            } else if (!epInput.value) {
+                                epInput.value = `${response.activeEndpoint}/api/chat`;
+                            }
+                        }
+                    } else {
+                        modelSelect.innerHTML = `<option value="">⚠️ Connection failed</option>`;
+                        return;
+                    }
+                } catch (e) {
+                    console.warn("Local model fetch failed", e);
+                    modelSelect.innerHTML = `<option value="">⚠️ Error: ${e.message}</option>`;
+                    return;
+
+                }
+            }
+
+            modelSelect.innerHTML = '<option value="">▼</option>';
+            models.forEach(m => {
+                const opt = document.createElement('option');
+                const val = m.id || m;
+                opt.value = val;
+                opt.textContent = val;
+                modelSelect.appendChild(opt);
+            });
+        };
+
+        const fillForm = (cfg) => {
+            nameInput.value = cfg.name || '';
+            providerSel.value = cfg.provider || 'openai';
+            keyInput.value = cfg.apiKey || '';
+            epInput.value = cfg.endpoint || '';
+            modelInput.value = cfg.model || '';
+            updateUIState();
+            updateModelList(providerSel.value);
+        };
+
+        fillForm(currentConfig);
+
+        profileSelect.onchange = () => {
+            const selectedName = profileSelect.value;
+            if (selectedName === '__new__') {
+                fillForm({ name: 'New Config', provider: 'openai' });
+            } else {
+                const cfg = allConfigs.find(c => c.name === selectedName);
+                if (cfg) fillForm(cfg);
+            }
+        };
+
+        providerSel.addEventListener('change', async () => {
+            updateUIState();
+            let defEp = '';
+            let defModel = MODEL_PRESETS[providerSel.value] ? MODEL_PRESETS[providerSel.value][0] : '';
+
+            if (providerSel.value === 'openai') defEp = 'https://api.openai.com/v1/chat/completions';
+            else if (providerSel.value === 'gemini') defEp = `https://generativelanguage.googleapis.com/v1beta/models/${defModel}:streamGenerateContent`;
+            else if (providerSel.value === 'claude') defEp = 'https://api.anthropic.com/v1/messages';
+            else if (providerSel.value === 'grok') defEp = 'https://api.x.ai/v1/chat/completions';
+            else if (providerSel.value === 'ollama') defEp = 'http://localhost:11434';
+            else if (providerSel.value === 'lm-studio') defEp = 'http://localhost:1234';
+
+            epInput.value = defEp;
+            modelInput.value = defModel;
+            await updateModelList(providerSel.value);
+        });
+
+        modelSelect.addEventListener('change', () => {
+            if (modelSelect.value) {
+                modelInput.value = modelSelect.value;
+                if (providerSel.value === 'gemini') {
+                    epInput.value = `https://generativelanguage.googleapis.com/v1beta/models/${modelSelect.value}:streamGenerateContent`;
+                }
+                flashInput(modelInput);
+            }
+        });
+
+        modelInput.oninput = () => {
+            if (providerSel.value === 'gemini' && modelInput.value.trim()) {
+                epInput.value = `https://generativelanguage.googleapis.com/v1beta/models/${modelInput.value.trim()}:streamGenerateContent`;
+            }
+        };
+
+        advToggle.onclick = () => {
+            const isHidden = epInput.style.display === 'none';
+            epInput.style.display = isHidden ? 'block' : 'none';
+            advToggle.querySelector('span').innerText = isHidden ? '▼' : '▶';
+        };
+
+        btnSave.onclick = function () {
+            const provider = providerSel.value;
+            const finalEndpoint = epInput.value.trim();
+            const finalKey = (provider === 'local') ? '' : keyInput.value.trim();
+            const finalModel = modelInput.value.trim();
+            const configName = nameInput.value.trim() || 'Custom Config';
+
+            const isLocal = (provider === 'ollama' || provider === 'lm-studio');
+            if (!isLocal && finalKey.length < 5) {
+                showToast("Please enter a valid API Key.");
+                return;
+            }
+
+            const newConfig = {
+                configured: true,
+                name: configName,
+                provider: provider,
+                endpoint: finalEndpoint,
+                apiKey: finalKey,
+                model: finalModel
+            };
+
+            btnSave.innerText = "SAVING...";
+
+            chrome.storage.local.get(['cc_all_ai_configs'], (result) => {
+                let latestAllConfigs = result.cc_all_ai_configs || [];
+
+                latestAllConfigs = latestAllConfigs.filter(c => c.name !== configName);
+
+                latestAllConfigs.push(newConfig);
+
+                chrome.storage.local.set({
+                    'cc_all_ai_configs': latestAllConfigs,
+                    'cc_ai_config': newConfig,
+                    'cc_active_ai_config_name': configName
+                }, () => {
+                    state.allAiConfigs = latestAllConfigs;
+                    state.aiConfig = newConfig;
+
+                    btnSave.innerText = "SAVED";
+                    btnSave.style.background = "#4CAF50";
+
+                    setTimeout(() => {
+                        btnSave.innerText = t.ai_save || "SAVE CONFIG";
+                        btnSave.style.background = "";
+
+                        const drawerPanel = document.getElementById('cc-ai-drawer-panel');
+                        const tab = document.querySelector('.cc-ai-tab');
+                        const rTab = document.querySelector('.cc-res-tab');
+                        if (drawerPanel) drawerPanel.classList.remove('open');
+                        if (tab) tab.classList.remove('active');
+                        if (rTab) rTab.style.display = 'flex';
+
+                        if (typeof loadAiConfig === 'function') loadAiConfig();
+                    }, 500);
+                });
+            });
+        };
+
+        container.querySelector('#btn-close-drawer-compact').onclick = () => {
             document.getElementById('cc-ai-drawer-panel').classList.remove('open');
-            document.querySelectorAll('.cc-ai-tab, .cc-res-tab').forEach(el => el.classList.remove('active'));
-        };
-
-        container.querySelector('#btn-copy-res').onclick = () => {
-            const text = streamArea.innerText;
-            navigator.clipboard.writeText(text);
-            showToast("Copied!");
-        };
-
-        container.querySelector('#btn-clear-res').onclick = () => {
-            streamArea.innerText = "";
-            window.ccManager.lastAiText = "";
+            document.querySelector('.cc-ai-tab').classList.remove('active');
+            const resTab = document.querySelector('.cc-res-tab');
+            if (resTab) resTab.style.display = 'flex';
         };
     };
 
@@ -2975,12 +3213,150 @@
         }, 200);
     }
 
+    function showTokenWarningModal(estTokens, limit, platformName, onConfirmCallback) {
+        const t = LANG_DATA[state.lang];
+        if (document.querySelector('.cc-warning-overlay')) return;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'cc-warning-overlay';
+        Object.assign(overlay.style, {
+            position: 'fixed', top: '0', left: '0', width: '100vw', height: '100vh',
+            background: 'rgba(0, 0, 0, 0.8)', zIndex: '2147483660',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backdropFilter: 'blur(5px)', opacity: '0', transition: 'opacity 0.3s'
+        });
+
+        const card = document.createElement('div');
+        Object.assign(card.style, {
+            width: '380px', background: '#1e1e1e', border: '1px solid #444',
+            borderTop: '4px solid #f00', borderRadius: '8px', padding: '20px',
+            boxShadow: '0 10px 40px rgba(0,0,0,0.5)', color: '#fff',
+            fontFamily: 'sans-serif', display: 'flex', flexDirection: 'column', gap: '15px'
+        });
+
+        const titleText = t.token_warn_title || '⚠️ Token Limit Warning';
+        const msgTemplate = t.token_warn_msg || 'Content ({est}) exceeds recommended limit for {platform} ({limit}).\n\nTransferring may cause memory loss.\nDo you want to proceed?';
+
+        const messageHtml = msgTemplate
+            .replace('{est}', `<b style="color:#ff5252;">${estTokens.toLocaleString()}</b>`)
+            .replace('{platform}', `<b>${platformName}</b>`)
+            .replace('{limit}', `<b>${limit.toLocaleString()}</b>`);
+
+        card.innerHTML = `
+            <div style="font-size:16px; font-weight:bold; color:#ff5252; display:flex; align-items:center; gap:8px;">
+                <span>${titleText}</span>
+            </div>
+            <div style="font-size:13px; color:#ccc; line-height:1.6; background:rgba(255,82,82,0.1); padding:10px; border-radius:4px;">
+                ${messageHtml.replace(/\n\n/g, '<br/><br/>').replace(/\n/g, '<br/>')}
+            </div>
+            <div style="font-size:12px; color:#aaa; margin-top:-5px; font-style:italic;">
+                * ${t.token_warn_msg.split('\n\n')[1] || 'Please confirm the risk before proceeding.'}
+            </div>
+            
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:5px;">
+                <button id="btn-cancel-warning" style="background:transparent; border:1px solid #555; color:#aaa; padding:8px 16px; cursor:pointer; border-radius:4px; font-size:12px;">
+                    ${t.preview_cancel || 'Cancel'}
+                </button>
+                <button id="btn-confirm-warning" style="background:#ff5252; border:none; color:#fff; padding:8px 16px; cursor:pointer; border-radius:4px; font-weight:bold; font-size:12px;">
+                    ${t.unlock_confirm || 'I Understand, Continue'}
+                </button>
+            </div>
+        `;
+
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+
+        requestAnimationFrame(() => overlay.style.opacity = '1');
+
+        const btnSave = card.querySelector('#btn-confirm-warning');
+        const btnCancel = card.querySelector('#btn-cancel-warning');
+
+        btnCancel.onclick = () => {
+            overlay.style.opacity = '0';
+            setTimeout(() => overlay.remove(), 300);
+        };
+
+        btnSave.onclick = () => {
+            btnSave.innerText = "Processing...";
+            btnSave.style.background = "#4CAF50";
+
+            if (onConfirmCallback) {
+                onConfirmCallback();
+            }
+
+            overlay.style.opacity = '0';
+            setTimeout(() => overlay.remove(), 300);
+        };
+    }
+
+    function updatePiPUITexts(win) {
+        if (!win || !win.document) return;
+        const doc = win.document;
+        const t = LANG_DATA[state.lang];
+
+        const tabCollect = doc.getElementById('tab-collect');
+        if (tabCollect) tabCollect.innerText = t.pip_tab_collect;
+
+        const tabFlow = doc.getElementById('tab-flow');
+        if (tabFlow) tabFlow.innerText = t.pip_tab_flow;
+
+        const btnTheme = doc.getElementById('btn-pip-theme');
+        if (btnTheme) btnTheme.title = t.pip_tooltip_theme;
+
+        const btnSettings = doc.getElementById('btn-pip-settings');
+        if (btnSettings) btnSettings.title = t.pip_tooltip_settings;
+
+        const btnMax = doc.getElementById('btn-pip-max');
+        if (btnMax) btnMax.title = t.pip_tooltip_max;
+
+        const btnPaste = doc.getElementById('btn-pip-paste');
+        if (btnPaste) {
+            btnPaste.title = t.pip_btn_paste;
+            const icon = btnPaste.querySelector('i');
+            btnPaste.innerHTML = '';
+            if (icon) btnPaste.appendChild(icon);
+            btnPaste.append(` ${t.pip_btn_paste}`);
+        }
+
+        const btnExport = doc.getElementById('btn-pip-export');
+        if (btnExport) {
+            btnExport.title = t.pip_btn_export;
+            const icon = btnExport.querySelector('i');
+            btnExport.innerHTML = '';
+            if (icon) btnExport.appendChild(icon);
+            btnExport.append(` ${t.pip_btn_export}`);
+        }
+
+        const btnClear = doc.getElementById('btn-pip-clear');
+        if (btnClear) {
+            btnClear.title = t.pip_btn_clear;
+            const icon = btnClear.querySelector('i');
+            btnClear.innerHTML = '';
+            if (icon) btnClear.appendChild(icon);
+            btnClear.append(` ${t.pip_btn_clear}`);
+        }
+
+        const dropTitle = doc.querySelector('.drop-zone-overlay div:nth-child(2)');
+        if (dropTitle) dropTitle.innerText = t.pip_drop_title;
+
+        const dropSub = doc.querySelector('.drop-zone-overlay div:nth-child(3)');
+        if (dropSub) dropSub.innerText = t.pip_drop_sub;
+
+        const mbTitle = doc.querySelector('.mb-title span:first-child');
+        if (mbTitle) mbTitle.innerText = t.pip_basket_title;
+
+        renderPiPList(win);
+        renderPiPNodes(win);
+        renderPiPConnections(win);
+        renderMiniBasket(win);
+    }
+
     function updateUITexts() {
-        const curLang = window.ccManager.lang;
+        const curLang = state.lang;
         const t = LANG_DATA[curLang];
 
         if (title) title.innerText = t.title;
-        if (msg && window.ccManager.uiMode !== 'robot') {
+        if (msg && state.uiMode !== 'robot') {
             if (!msg.innerText.includes('Selected') && !msg.innerText.includes('選取')) {
                 msg.innerText = t.status_ready;
             }
@@ -3001,6 +3377,48 @@
             if (span) span.innerText = t.ai_response_tab;
         }
 
+        const drone = document.getElementById('cc-drone-fab');
+        if (drone) {
+            drone.title = t.drone_title;
+            const closeBtn = drone.querySelector('.drone-close-btn');
+            if (closeBtn) closeBtn.title = t.drone_dismiss;
+
+            const card = document.querySelector('.cc-hover-card');
+            if (card) {
+                const btnClear = card.querySelector('#cc-clear-btn');
+                if (btnClear) btnClear.title = t.btn_clear_basket;
+
+                const btnExpand = card.querySelector('#cc-expand-btn');
+                if (btnExpand) btnExpand.title = t.pip_tooltip_max || "Expand";
+
+                if (typeof updateHoverCardUI === 'function') updateHoverCardUI();
+            }
+        }
+
+        const btnSum = document.getElementById('sys-btn-sum');
+        if (btnSum) {
+            btnSum.textContent = t.sys_btn_summary;
+            btnSum.title = t.sys_tooltip_summary;
+        }
+        const btnTrans = document.getElementById('sys-btn-trans');
+        if (btnTrans) {
+            btnTrans.textContent = t.sys_btn_translate;
+            btnTrans.title = t.sys_tooltip_translate;
+        }
+        const btnExp = document.getElementById('sys-btn-exp');
+        if (btnExp) {
+            btnExp.textContent = t.sys_btn_explain;
+            btnExp.title = t.sys_tooltip_explain;
+        }
+        const btnSave = document.getElementById('sys-btn-save');
+        if (btnSave) {
+            btnSave.title = t.sys_tooltip_save;
+        }
+        const btnLoad = document.getElementById('sys-btn-load');
+        if (btnLoad) {
+            btnLoad.title = t.sys_tooltip_load;
+        }
+
         const stdPanel = document.getElementById('cc-panel');
         if (stdPanel) {
             if (prefixLabel) prefixLabel.innerText = t.label_prefix;
@@ -3012,6 +3430,11 @@
 
             if (btnScan) {
                 btnScan.textContent = t.btn_scan;
+            }
+            const btnAiConfig = document.getElementById('cc-btn-ai-config');
+            if (btnAiConfig) {
+                btnAiConfig.textContent = t.btn_quick_settings;
+                btnAiConfig.title = t.ai_setting_tab;
             }
             if (basketLabel) basketLabel.innerText = t.label_basket;
             if (btnAddBasket) btnAddBasket.innerText = t.btn_add_basket;
@@ -3038,6 +3461,12 @@
             if (robotBtn && robotBtn.innerText === '🤖') {
                 robotBtn.title = t.btn_switch_ui || "Switch UI";
             }
+            const platformBtns = stdPanel.querySelectorAll('.platform-btn');
+            platformBtns.forEach((btn, index) => {
+                if (PLATFORMS[index]) {
+                    btn.title = t.tooltip_transfer_to.replace('{name}', PLATFORMS[index].name);
+                }
+            });
 
             const drawerToggle = document.querySelector('.cc-drawer-toggle');
             if (drawerToggle) {
@@ -3053,6 +3482,21 @@
 
             const btnUnsel = document.getElementById('mech-btn-unselect');
             if (btnUnsel) btnUnsel.title = t.btn_unselect_all;
+
+            const mBtnSum = document.getElementById('mech-sys-btn-sum');
+            if (mBtnSum) { mBtnSum.textContent = t.sys_btn_summary; mBtnSum.title = t.sys_tooltip_summary; }
+
+            const mBtnTrans = document.getElementById('mech-sys-btn-trans');
+            if (mBtnTrans) { mBtnTrans.textContent = t.sys_btn_translate; mBtnTrans.title = t.sys_tooltip_translate; }
+
+            const mBtnExp = document.getElementById('mech-sys-btn-exp');
+            if (mBtnExp) { mBtnExp.textContent = t.sys_btn_explain; mBtnExp.title = t.sys_tooltip_explain; }
+
+            const mBtnSave = document.getElementById('mech-btn-save');
+            if (mBtnSave) { mBtnSave.title = t.sys_tooltip_save; }
+
+            const mBtnLoad = document.getElementById('mech-btn-load');
+            if (mBtnLoad) { mBtnLoad.title = t.sys_tooltip_load; }
 
             const btnPnt = document.getElementById('mech-btn-paint');
             if (btnPnt) btnPnt.title = t.btn_paint + t.hint_shortcut_paint;
@@ -3085,10 +3529,22 @@
             if (stText) stText.innerText = t.status_ready;
 
             const comms = document.getElementById('mech-comms-btn');
-            if (comms) comms.title = t.ai_response_tab;
+            if (comms) {
+                comms.title = t.ai_response_tab;
+                comms.innerHTML = `<span class="icon">📶</span>${t.robot_comms_tab}`;
+            }
 
             const antenna = document.querySelector('.antenna-group');
-            if (antenna) antenna.title = t.ai_setting_tab;
+            if (antenna) {
+                antenna.title = shouldShowAI() ? t.ai_setting_tab : t.unlock_title;
+            }
+
+            const thrusterBtns = robotPanel.querySelectorAll('.thruster-btn');
+            thrusterBtns.forEach((btn, index) => {
+                if (PLATFORMS[index]) {
+                    btn.title = t.tooltip_transfer_to.replace('{name}', PLATFORMS[index].name);
+                }
+            });
 
             const aiTrig = document.getElementById('mech-ai-trigger');
             if (aiTrig) aiTrig.title = t.btn_summary;
@@ -3118,8 +3574,8 @@
             }
         }
 
-        if (window.ccManager.streamingModal && window.ccManager.streamingModal.element) {
-            const m = window.ccManager.streamingModal.element;
+        if (state.streamingModal && state.streamingModal.element) {
+            const m = state.streamingModal.element;
             const mTitle = m.querySelector('.cc-modal-header div');
             if (mTitle) mTitle.innerHTML = `🤖 ${t.ai_modal_title}`;
 
@@ -3138,23 +3594,81 @@
             if (btnSendAll) btnSendAll.innerHTML = t.btn_send_all;
         }
 
+        const dropTextStd = document.querySelector('#cc-panel .cc-drop-text');
+        if (dropTextStd) dropTextStd.innerText = t.overlay_drop_add;
+
+        const dropTextRobot = document.querySelector('#cc-robot-panel .cc-drop-text');
+        if (dropTextRobot) dropTextRobot.innerText = t.overlay_acquiring;
+
+        if (state.isPiPActive && state.pipWindow) {
+            updatePiPUITexts(state.pipWindow);
+        }
+
         calculateTotalTokens();
         updateBasketUI();
+        updateMultiNodeTexts();
+    }
+
+    function updateMultiNodeTexts() {
+        const modal = document.querySelector('.cc-modal-card');
+        if (!modal) return;
+
+        const t = LANG_DATA[state.lang];
+        const isSingle = state.aiLayoutMode === 'single';
+
+        const titleEl = document.getElementById('cc-mm-title') || document.getElementById('modal-title-text');
+        if (titleEl) titleEl.innerText = isSingle ? t.mm_title_single : t.mm_title_multi;
+
+        const toggleBtn = document.getElementById('btn-toggle-view');
+        if (toggleBtn) toggleBtn.innerText = isSingle ? t.mm_view_multi : t.mm_view_single;
+
+        const loopLabel = document.getElementById('cc-mm-loop-label');
+        if (loopLabel) loopLabel.innerText = t.mm_loop_label;
+
+        const btnAdd = document.getElementById('btn-add-node');
+        if (btnAdd) btnAdd.innerText = t.mm_add_node;
+
+        const btnRun = document.getElementById('btn-run-flow');
+        if (btnRun) btnRun.innerText = t.mm_run;
+
+        const btnStop = document.getElementById('btn-stop-all');
+        if (btnStop && !btnStop.innerText.includes('🛑')) {
+            btnStop.innerText = t.mm_stop;
+        }
+
+        const btnSendAll = document.getElementById('btn-mm-send-all');
+        if (btnSendAll) btnSendAll.innerText = t.mm_send_all;
+
+        const basketTitle = document.getElementById('cc-mm-basket-title');
+        if (basketTitle) basketTitle.innerText = t.mm_basket;
+
+        const btnPaste = document.getElementById('btn-mm-basket-paste');
+        if (btnPaste) btnPaste.title = t.mm_basket_paste;
+
+        const btnExport = document.getElementById('btn-mm-basket-export');
+        if (btnExport) btnExport.title = t.mm_basket_export;
+
+        const btnImport = document.getElementById('btn-mm-basket-import');
+        if (btnImport) btnImport.title = t.mm_basket_import;
+
+        const mTitle = modal.querySelector('.cc-modal-header span');
+        if (mTitle && !mTitle.id) mTitle.innerText = isSingle ? t.mm_title_single : t.mm_title_multi;
     }
 
     function performScan() {
-        if (!window.ccManager.active) return;
-        if (!window.ccManager.config || !window.ccManager.config.msgSelector) return;
+        if (!state.active) return;
+        fixGeminiDropZone();
+        if (!state.config || !state.config.msgSelector) return;
 
-        const els = document.querySelectorAll(window.ccManager.config.msgSelector);
+        const els = document.querySelectorAll(state.config.msgSelector);
         let count = 0;
-        const curLang = window.ccManager.lang;
+        const curLang = state.lang;
         const t = LANG_DATA[curLang];
 
         els.forEach(el => {
             if (el.querySelector('.cc-btn') || el.dataset.ccListening === 'true' || el.innerText.trim().length < 1) return;
 
-            if (window.ccManager.config.ignore && el.closest(window.ccManager.config.ignore)) {
+            if (state.config.ignore && el.closest(state.config.ignore)) {
                 return;
             }
 
@@ -3163,28 +3677,11 @@
                 el.style.position = 'relative';
             }
 
-            if (style.borderRadius === '0px') {
-            }
-            el.setAttribute('draggable', 'true');
-            const onDragStart = (e) => {
-                const cleanText = convertToMarkdown(el);
-                e.dataTransfer.setData('text/plain', cleanText);
-                e.dataTransfer.effectAllowed = 'copy';
-                el.style.opacity = '0.5';
-            };
-
-            const onDragEnd = (e) => {
-                el.style.opacity = '1';
-            };
-
-            el.addEventListener('dragstart', onDragStart);
-            el.addEventListener('dragend', onDragEnd);
-
             const btn = document.createElement('button');
             btn.className = 'cc-btn';
             btn.innerText = '➕';
-            btn.title = t.btn_add_title;
-
+            btn.title = t.btn_add_title + " (Drag)";
+            btn.setAttribute('draggable', 'true');
             Object.assign(btn.style, {
                 position: 'absolute',
                 top: '6px', right: '6px', left: 'auto',
@@ -3193,7 +3690,7 @@
                 color: '#2196F3',
                 border: '2px solid #2196F3',
                 fontWeight: '900',
-                padding: '0', fontSize: '16px', cursor: 'pointer',
+                padding: '0', fontSize: '16px', cursor: 'grab',
                 borderRadius: '50%',
                 boxShadow: '0 2px 8px rgba(33, 150, 243, 0.4)',
                 width: '32px', height: '32px',
@@ -3202,8 +3699,52 @@
                 transition: 'all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1)'
             });
 
+            const onDragStart = (e) => {
+                e.stopPropagation();
+                const cleanText = convertToMarkdown(el);
+                e.dataTransfer.setData('text/plain', cleanText);
+                e.dataTransfer.setData('text', cleanText);
+                e.dataTransfer.effectAllowed = 'copy';
+                chrome.storage?.local?.set({
+                    cc_last_drag_text: cleanText,
+                    cc_last_drag_ts: Date.now()
+                });
+                el.style.opacity = '0.6';
+                btn.style.cursor = 'grabbing';
+            };
+
+            const onDragEnd = (e) => {
+                el.style.opacity = '1';
+                btn.style.cursor = 'grab';
+
+                if (window.location.hostname.includes('claude.ai')) {
+                    document.dispatchEvent(new DragEvent('dragleave', {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window
+                    }));
+
+                    const inputArea = document.querySelector('[data-testid="chat-input-grid-area"]');
+                    if (inputArea) {
+                        inputArea.dispatchEvent(new DragEvent('dragleave', { bubbles: true }));
+                    }
+
+                    const overlays = document.querySelectorAll('.fixed.inset-0');
+                    overlays.forEach(overlay => {
+                        const style = window.getComputedStyle(overlay);
+                        if (overlay.querySelector('input[type="file"]') || parseInt(style.zIndex) >= 40) {
+                            overlay.dispatchEvent(new DragEvent('dragleave', { bubbles: true }));
+                        }
+                    });
+                }
+            };
+
+            btn.addEventListener('dragstart', onDragStart);
+            btn.addEventListener('dragend', onDragEnd);
+            el.addEventListener('dragend', onDragEnd);
+
             const onMouseEnter = () => {
-                if (!window.ccManager.active) return;
+                if (!state.active) return;
                 if (btn.dataset.selected !== 'true') {
                     el.dataset.ccHover = 'true';
                     btn.style.transform = 'scale(1.1)';
@@ -3218,7 +3759,7 @@
             };
 
             const onClick = (e) => {
-                if (!window.ccManager.active) return;
+                if (!state.active) return;
                 const selection = window.getSelection();
                 if (selection && selection.toString().length > 0) return;
                 if (e.target.closest('a, button, input, textarea, [role="button"], .cc-btn')) return;
@@ -3253,7 +3794,7 @@
                 e.stopPropagation();
                 const allBtns = Array.from(document.querySelectorAll('.cc-btn'));
                 const currentIndex = allBtns.indexOf(this);
-                const lastIndex = window.ccManager.lastCheckedIndex;
+                const lastIndex = state.lastCheckedIndex;
 
                 if (e.shiftKey && lastIndex !== null && lastIndex !== -1) {
                     const start = Math.min(currentIndex, lastIndex);
@@ -3267,7 +3808,7 @@
                     if (this.dataset.selected !== 'true') selectBtn(this);
                     else unselectBtn(this);
                 }
-                window.ccManager.lastCheckedIndex = currentIndex;
+                state.lastCheckedIndex = currentIndex;
                 updateStatus();
                 calculateTotalTokens();
             };
@@ -3323,16 +3864,24 @@
 
     function updateStatus() {
         if (!msg) return;
-        const curLang = window.ccManager.lang;
+        const curLang = state.lang;
         const n = document.querySelectorAll('.cc-btn[data-selected="true"]').length;
-        msg.innerText = LANG_DATA[curLang].msg_selected.replace('{n}', n);
+        if (state.uiMode === 'standard' && msg.id === 'status-badge') {
+            msg.innerText = LANG_DATA[curLang].msg_selected.replace('{n}', n);
+        }
+
+        if (state.uiMode === 'robot') {
+            updateRobotBasketText(document.querySelectorAll('.cc-basket-item').length);
+        }
     }
 
     function getSelectedText(includePrefix = true) {
         const selected = document.querySelectorAll('.cc-btn[data-selected="true"]');
         if (selected.length === 0) return null;
 
+        const t = LANG_DATA[state.lang];
         let combined = "";
+
         if (includePrefix) {
             const userPrefix = document.getElementById('cc-prefix-input').value;
             if (userPrefix) combined += userPrefix + "\n\n====================\n\n";
@@ -3340,16 +3889,17 @@
 
         selected.forEach(btn => {
             const textContent = convertToMarkdown(btn.parentElement);
-            combined += `--- Fragment ---\n${textContent}\n\n`;
+            combined += `${t.prompt_fragment}\n${textContent}\n\n`;
         });
 
         if (includePrefix) {
-            combined += "====================\n[END OF CONTEXT]";
+            combined += `====================\n${t.prompt_end}`;
         }
         return combined;
     }
 
     function constructFinalContent(pageSelection, basketItems) {
+        const t = LANG_DATA[state.lang];
         const prefix = document.getElementById('cc-prefix-input')?.value || "";
         let finalContent = "";
 
@@ -3362,21 +3912,26 @@
         }
 
         if (basketItems && basketItems.length > 0) {
-            if (pageSelection) finalContent += "\n========== [ BASKET CONTENT ] ==========\n\n";
+            if (pageSelection) {
+                finalContent += t.prompt_sep_basket + "\n";
+            }
 
-            const basketText = basketItems.map((item, idx) =>
-                `[Basket Item ${idx + 1} from ${item.source}]\n${item.text}`
-            ).join("\n\n--------------------\n\n");
+            const basketText = basketItems.map((item, idx) => {
+                const header = t.prompt_item_prefix
+                    .replace('{n}', idx + 1)
+                    .replace('{source}', item.source);
+                return `${header}\n${item.text}`;
+            }).join("\n\n--------------------\n\n");
 
             finalContent += basketText;
         }
 
-        finalContent += "\n\n====================\n[END OF CONTEXT]";
+        finalContent += `\n\n====================\n${t.prompt_end}`;
         return finalContent;
     }
 
     function resolveContentToExport(callback) {
-        const t = LANG_DATA[window.ccManager.lang];
+        const t = LANG_DATA[state.lang];
 
         getBasket((basket) => {
             const pageText = getSelectedText(false);
@@ -3384,7 +3939,7 @@
             const hasPage = (pageText && pageText.length > 0);
 
             if (!hasPage && !hasBasket) {
-                alert(t.alert_no_selection);
+                showToast(t.alert_no_selection);
                 return;
             }
 
@@ -3462,34 +4017,25 @@
 
     function handleDownload() {
         resolveContentToExport((finalContent) => {
-            const blob = new Blob([finalContent], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'chat-context-' + new Date().toISOString().slice(0, 10) + '.txt';
-            document.body.appendChild(a);
-            a.addEventListener('click', (e) => {
-                e.stopPropagation();
-            });
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            if (!finalContent) return;
+            const defaultName = 'context-carry-' + new Date().toISOString().slice(0, 10);
+            showUniversalExportModal(window, finalContent, defaultName);
         });
     }
 
     function handleCopyOnly() {
-        const t = LANG_DATA[window.ccManager.lang];
+        const t = LANG_DATA[state.lang];
 
         getBasket((basket) => {
             const pageText = getSelectedText(false);
             if (!pageText && (!basket || basket.length === 0)) {
-                alert(t.alert_no_selection);
+                showToast(t.alert_no_selection);
                 return;
             }
             const finalContent = constructFinalContent(pageText, basket);
             navigator.clipboard.writeText(finalContent).then(() => {
                 showToast(t.alert_copy_done);
-            }).catch(err => alert("Copy failed"));
+            }).catch(err => showToast("Copy failed"));
         });
     }
 
@@ -3500,62 +4046,111 @@
         });
     }
 
-    function updateBasketUI() {
-        getBasket((basket) => {
-            const count = basket.length;
-            const t = LANG_DATA[window.ccManager.lang];
-            if (basketStatus && basketStatus.style.display !== 'none') {
-                if (count === 0) {
-                    basketStatus.innerText = t.basket_status_empty;
-                    basketStatus.style.color = '#aaa';
-                    if (basketPreviewList) basketPreviewList.style.display = 'none';
-                    window.ccManager.isPreviewOpen = false;
-                } else {
-                    basketStatus.innerText = t.basket_status.replace('{n}', count);
-                    basketStatus.style.color = '#4CAF50';
-                    if (window.ccManager.isPreviewOpen) {
-                        renderBasketPreview(basket);
+    function basketOp(op, cb) {
+        chrome.runtime.sendMessage({ action: "BASKET_OP", op }, (res) => {
+            if (chrome.runtime.lastError) {
+                console.warn('Context-Carry: BASKET_OP failed', chrome.runtime.lastError);
+                cb && cb({ success: false, error: chrome.runtime.lastError.message });
+                return;
+            }
+            cb && cb(res || { success: true });
+        });
+    }
+
+    function updateBasketUI(callback) {
+        getBasket((fetchedData) => {
+            let currentBasket = fetchedData || [];
+            basket = currentBasket;
+
+            const count = currentBasket.length;
+            const t = LANG_DATA[state.lang];
+
+            if (typeof updateDroneUI === 'function') {
+                updateDroneUI(currentBasket);
+            }
+
+            if (typeof updateHoverCardUI === 'function') {
+                updateHoverCardUI();
+            }
+
+            if (state.isPiPActive && state.pipWindow) {
+                renderPiPList(state.pipWindow);
+                renderMiniBasket(state.pipWindow);
+            }
+
+            if (state.uiMode === 'standard') {
+                if (basketStatus) {
+                    if (count === 0) {
+                        basketStatus.innerText = t.basket_status_empty;
+                        basketStatus.style.color = '#aaa';
+                        if (basketPreviewList) basketPreviewList.style.display = 'none';
+                        state.isPreviewOpen = false;
+                    } else {
+                        basketStatus.innerText = t.basket_status.replace('{n}', count);
+                        basketStatus.style.color = '#4CAF50';
+                        if (state.isPreviewOpen && basketPreviewList) {
+                            basketPreviewList.style.display = 'block';
+                            renderBasketPreview(currentBasket);
+                        }
                     }
                 }
-            }
-            else if (window.ccManager.uiMode === 'robot') {
+            } else if (state.uiMode === 'robot') {
                 updateRobotBasketText(count);
                 if (basketPreviewList) {
                     basketPreviewList.style.display = 'block';
                     if (count === 0) {
                         basketPreviewList.innerHTML = `<div style="text-align:center; color:var(--mech-text-dim); padding:15px; font-size:11px; letter-spacing:1px; border:1px dashed var(--mech-border); border-radius:4px;">[ CARGO BAY EMPTY ]</div>`;
                     } else {
-                        renderBasketPreview(basket);
+                        renderBasketPreview(currentBasket);
                     }
                 }
             }
 
+            if (state.basketListeners) {
+                state.basketListeners.forEach(listener => {
+                    try { listener(currentBasket); } catch (e) { console.error(e); }
+                });
+            }
+
+
             calculateTotalTokens();
-        });
-    }
 
-    function toggleBasketPreview() {
-        if (!basketPreviewList) return;
-        const isHidden = basketPreviewList.style.display === 'none';
-
-        getBasket((basket) => {
-            if (basket.length === 0) return;
-
-            if (isHidden) {
-                basketPreviewList.style.display = 'block';
-                window.ccManager.isPreviewOpen = true;
-                renderBasketPreview(basket);
-            } else {
-                basketPreviewList.style.display = 'none';
-                window.ccManager.isPreviewOpen = false;
+            if (callback && typeof callback === 'function') {
+                callback(currentBasket);
             }
         });
     }
 
-    let draggingIndex = null;
+    function toggleBasketPreview(forceOpen = false) {
+        if (!basketPreviewList) return;
+
+        const isHidden = basketPreviewList.style.display === 'none';
+        if (forceOpen && !isHidden) return;
+        if (!forceOpen && !isHidden) {
+            basketPreviewList.style.display = 'none';
+            state.isPreviewOpen = false;
+            const panel = document.getElementById('cc-panel');
+            if (panel) panel.classList.remove('expanded');
+            return;
+        }
+
+        state.isPreviewOpen = true;
+        basketPreviewList.style.display = 'block';
+
+        const panel = document.getElementById('cc-panel');
+        if (panel && panel.classList.contains('cc-visible')) {
+            panel.classList.add('expanded');
+        }
+
+
+        updateBasketUI();
+    }
+
+    let draggingId = null;
     function renderBasketPreview(basket) {
+        if (tooltip) tooltip.style.display = 'none';
         basketPreviewList.innerHTML = '';
-        const t = LANG_DATA[window.ccManager.lang];
+        const t = LANG_DATA[state.lang];
         const prefixEl = document.getElementById('cc-prefix-input');
         const currentPrefix = prefixEl ? prefixEl.value : "";
         let isDraggingRow = false;
@@ -3569,6 +4164,7 @@
             row.className = 'cc-basket-item';
             row.draggable = true;
             row.dataset.index = index;
+            row.dataset.id = item.id;
 
             Object.assign(row.style, {
                 background: '#333', padding: '8px', borderRadius: '6px', fontSize: '11px',
@@ -3579,7 +4175,7 @@
             });
 
             row.onmouseenter = (e) => {
-                if (!tooltip || draggingIndex !== null) return;
+                if (!tooltip || draggingId !== null) return;
                 let fullClean = item.text;
                 if (currentPrefix && fullClean.startsWith(currentPrefix)) fullClean = fullClean.replace(currentPrefix, '');
                 fullClean = fullClean.replace(/={5,}/g, '').replace(/--- Fragment ---/g, '').replace(/\[END OF CONTEXT\]/g, '').trim();
@@ -3593,9 +4189,10 @@
             row.ondragstart = (e) => {
                 e.stopPropagation();
                 isDraggingRow = true;
-                draggingIndex = index;
+                draggingId = item.id;
                 e.dataTransfer.setData('text/plain', item.text);
-                e.dataTransfer.setData('application/cc-index', index.toString());
+                e.dataTransfer.setData('text', item.text);
+                e.dataTransfer.setData('application/cc-id', item.id);
                 e.dataTransfer.setData('application/cc-sort', 'true');
                 e.dataTransfer.effectAllowed = 'copyMove';
 
@@ -3604,13 +4201,44 @@
             };
 
             row.ondragend = (e) => {
-                draggingIndex = null;
+                draggingId = null;
                 row.style.opacity = '1';
                 setTimeout(() => { isDraggingRow = false; }, 200);
                 document.querySelectorAll('.cc-basket-item').forEach(el => {
                     el.style.borderTopColor = 'transparent';
                     el.style.borderBottomColor = 'transparent';
                 });
+
+                if (window.location.hostname.includes('claude.ai')) {
+                    const leaveEvent = new DragEvent('dragleave', {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window,
+                        clientX: 0,
+                        clientY: 0
+                    });
+
+                    const dropEvent = new DragEvent('drop', {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window
+                    });
+
+                    const targets = [
+                        document,
+                        document.body,
+                        document.querySelector('[data-testid="chat-input-grid-area"]'),
+                        document.querySelector('div[class*="drag-overlay"]'),
+                        ...document.querySelectorAll('.fixed.inset-0')
+                    ];
+
+                    targets.forEach(t => {
+                        if (t) {
+                            t.dispatchEvent(leaveEvent);
+                            setTimeout(() => t.dispatchEvent(dropEvent), 10);
+                        }
+                    });
+                }
             };
             row.ondragover = (e) => {
                 e.preventDefault();
@@ -3619,7 +4247,7 @@
                     return;
                 }
 
-                if (draggingIndex === index || draggingIndex === null) return;
+                if (!draggingId || draggingId === item.id) return;
 
                 e.dataTransfer.dropEffect = 'move';
 
@@ -3646,10 +4274,19 @@
                 e.stopPropagation();
                 row.style.borderTopColor = 'transparent';
                 row.style.borderBottomColor = 'transparent';
-                const fromIndex = parseInt(e.dataTransfer.getData('application/cc-index'));
-                if (fromIndex !== index && !isNaN(fromIndex)) {
-                    handleReorderBasket(fromIndex, index);
-                }
+                const fromId = e.dataTransfer.getData('application/cc-id');
+                const toId = item.id;
+                if (!fromId || !toId || fromId === toId) return;
+
+                const order = basket.map(it => it.id).filter(Boolean);
+                const fromIndex = order.indexOf(fromId);
+                const toIndex = order.indexOf(toId);
+                if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+
+                const [moved] = order.splice(fromIndex, 1);
+                order.splice(toIndex, 0, moved);
+
+                basketOp({ kind: 'REORDER', order }, () => updateBasketUI());
             };
 
             row.onclick = (e) => {
@@ -3657,15 +4294,11 @@
                 if (e.target.closest('button')) return;
 
                 showEditorModal("Edit Item", item.text, (newText) => {
-                    getBasket((currentBasket) => {
-                        if (currentBasket[index]) {
-                            currentBasket[index].text = newText;
-                            currentBasket[index].timestamp = Date.now();
-                            chrome.storage.local.set({ 'cc_basket': currentBasket }, () => {
-                                updateBasketUI();
-                                showToast("Content updated ✨");
-                            });
-                        }
+                    const id = item.id || row.dataset.id;
+                    if (!id) return;
+
+                    updateBasketItemText(id, newText, () => {
+                        showToast("Content updated ✨");
                     });
                 });
             };
@@ -3702,7 +4335,7 @@
             delBtn.onclick = (e) => {
                 e.stopPropagation();
                 row.classList.add('cc-deleting');
-                setTimeout(() => handleDeleteSingleItem(index), 300);
+                setTimeout(() => handleDeleteSingleItem(item.id || row.dataset.id, row), 300);
             };
 
             row.append(info, delBtn);
@@ -3730,37 +4363,39 @@
 
     function handleReorderBasket(fromIndex, toIndex) {
         getBasket((basket) => {
+            if (!Array.isArray(basket)) return;
+            if (fromIndex < 0 || toIndex < 0 || fromIndex >= basket.length || toIndex >= basket.length) return;
             const [movedItem] = basket.splice(fromIndex, 1);
             basket.splice(toIndex, 0, movedItem);
-            chrome.storage.local.set({ 'cc_basket': basket }, () => {
+            basketOp({ kind: 'REORDER', order: basket.map(it => it.id).filter(Boolean) }, () => {
                 updateBasketUI();
             });
         });
     }
 
-    function handleDeleteSingleItem(index) {
-        getBasket((basket) => {
-            basket.splice(index, 1);
-            chrome.storage.local.set({ 'cc_basket': basket }, () => {
-                updateBasketUI();
-            });
+    function handleDeleteSingleItem(id, rowElement) {
+        const targetId = id || (rowElement && rowElement.dataset ? rowElement.dataset.id : null);
+        if (!targetId) return;
+        if (rowElement) rowElement.remove();
+        basketOp({ kind: 'DELETE', id: targetId }, () => {
+            updateBasketUI();
         });
     }
 
     function handleNewDoc() {
-        const t = LANG_DATA[window.ccManager.lang];
+        const t = LANG_DATA[state.lang];
         showEditorModal(t.btn_new_doc || "New Document", "", (text) => {
             if (text && text.trim().length > 0) {
-                getBasket((basket) => {
-                    basket.push({
+                basketOp({
+                    kind: 'ADD',
+                    item: {
                         text: text.trim(),
                         timestamp: Date.now(),
-                        source: "Manual Entry (New Doc)"
-                    });
-                    chrome.storage.local.set({ 'cc_basket': basket }, () => {
-                        showToast(t.toast_basket_add || "Added to basket");
-                        updateBasketUI();
-                    });
+                        source: t.src_manual
+                    }
+                }, () => {
+                    showToast(t.toast_basket_add || "Added to basket");
+                    updateBasketUI();
                 });
             }
         });
@@ -3768,68 +4403,90 @@
 
     function handleAddToBasket() {
         const text = getSelectedText(false);
-        const t = LANG_DATA[window.ccManager.lang];
-        if (!text) { alert(t.alert_no_selection); return; }
+        const t = LANG_DATA[state.lang];
+        if (!text) { showToast(t.alert_no_selection); return; }
 
-        getBasket((basket) => {
-            basket.push({
+        basketOp({
+            kind: 'ADD',
+            item: {
                 text: text,
                 timestamp: Date.now(),
                 source: window.location.hostname
-            });
-            chrome.storage.local.set({ 'cc_basket': basket }, () => {
-                showToast(t.toast_basket_add);
-                handleUnselectAll();
-            });
+            }
+        }, () => {
+            showToast(t.toast_basket_add);
+            handleUnselectAll();
         });
     }
 
     function handleClearBasket() {
-        chrome.storage.local.remove('cc_basket', () => {
-            const t = LANG_DATA[window.ccManager.lang];
+        basketOp({ kind: 'CLEAR' }, () => {
+            const t = LANG_DATA[state.lang];
             showToast(t.toast_basket_clear);
             updateBasketUI();
         });
     }
 
     function handlePasteBasket() {
-        const t = LANG_DATA[window.ccManager.lang];
-        if (!window.ccManager.config) {
-            alert(t.alert_llm_only);
-            return;
-        }
+        const t = LANG_DATA[state.lang];
         getBasket((basket) => {
-            if (basket.length === 0) { alert("Basket is empty!"); return; }
-            const finalContent = constructFinalContent(null, basket);
-            const currentPlatform = PLATFORMS.find(p => window.location.hostname.includes(p.id));
-            if (currentPlatform) {
-                const est = estimateTokens(finalContent);
-                if (est > currentPlatform.limit) {
-                    const msg = t.token_warn_msg.replace('{est}', est).replace('{platform}', currentPlatform.name).replace('{limit}', currentPlatform.limit);
-                    if (!confirm(msg)) return;
-                }
+            if (basket.length === 0) { showToast("Basket is empty!"); return; }
+
+            const inputEl = document.querySelector(config ? config.inputSelector : 'textarea, input[type="text"], [contenteditable="true"]');
+
+            if (!inputEl) {
+                showToast(t.alert_llm_only);
+                return;
             }
 
-            const inputEl = document.querySelector(config.inputSelector);
-            if (inputEl) {
-                autoFillInput(inputEl, finalContent);
-                showToast(t.toast_autofill);
-            } else alert("Cannot find input box.");
+            const finalContent = constructFinalContent(null, basket);
+
+            let limit = 100000;
+            let platformName = 'General LLM Page';
+
+            if (state.config) {
+                const currentPlatform = PLATFORMS.find(p => window.location.hostname.includes(p.id));
+                if (currentPlatform) {
+                    limit = currentPlatform.limit || limit;
+                    platformName = currentPlatform.name;
+                }
+            } else {
+                limit = 100000;
+            }
+
+            const est = estimateTokens(finalContent);
+            if (est > limit) {
+                showTokenWarningModal(est, limit, platformName, () => {
+                    autoFillInput(inputEl, finalContent);
+                    showToast(t.toast_autofill);
+                });
+                return;
+            }
+
+            autoFillInput(inputEl, finalContent);
+            showToast(t.toast_autofill);
         });
     }
 
     function handleCrossTransfer(platformObj) {
         resolveContentToExport((finalContent) => {
-            const t = LANG_DATA[window.ccManager.lang];
+            if (!finalContent) return;
+            const t = LANG_DATA[state.lang];
             const est = estimateTokens(finalContent);
             const limit = platformObj.limit || 30000;
-
+            const platformName = platformObj.name;
+            const url = platformObj.url;
             if (est > limit) {
-                const warnMsg = t.token_warn_msg
-                    .replace('{est}', est.toLocaleString())
-                    .replace('{platform}', platformObj.name)
-                    .replace('{limit}', limit.toLocaleString());
-                if (!confirm(warnMsg)) return;
+                showTokenWarningModal(est, limit, platformName, () => {
+                    chrome.storage.local.set({
+                        'cc_transfer_payload': {
+                            text: finalContent,
+                            timestamp: Date.now(),
+                            source: window.location.hostname
+                        }
+                    }, () => window.open(url, '_blank'));
+                });
+                return;
             }
 
             chrome.storage.local.set({
@@ -3848,7 +4505,7 @@
 
         btns.forEach(btn => {
             if (btn.dataset.selected !== 'true') {
-                btn.click();
+                selectBtn(btn);
                 changed = true;
             }
         });
@@ -3863,13 +4520,13 @@
 
         btns.forEach(btn => {
             if (btn.dataset.selected === 'true') {
-                btn.click();
+                unselectBtn(btn);
                 changed = true;
             }
         });
 
         if (changed) updateStatus();
-        window.ccManager.lastCheckedIndex = null;
+        state.lastCheckedIndex = null;
         calculateTotalTokens();
     }
 
@@ -3878,21 +4535,26 @@
     ========================================= */
     function checkAutoFill() {
         if (!chrome.storage) return;
-        if (!window.ccManager.config) return;
+        if (!state.config) return;
 
         chrome.storage.local.get(['cc_transfer_payload'], (result) => {
             const data = result.cc_transfer_payload;
-            if (data && (Date.now() - data.timestamp < 30000)) {
-                let attempts = 0;
-                const maxAttempts = 20;
 
+            if (data && (Date.now() - data.timestamp < 30000)) {
+                const lastConsumed = sessionStorage.getItem('cc_last_consumed_ts');
+                if (lastConsumed && parseInt(lastConsumed) === data.timestamp) {
+                    return;
+                }
+
+                let attempts = 0;
+                const maxAttempts = 40;
                 const fillInterval = setInterval(() => {
-                    const inputEl = document.querySelector(config.inputSelector);
+                    const inputEl = document.querySelector(state.config.inputSelector);
                     if (inputEl) {
                         clearInterval(fillInterval);
                         autoFillInput(inputEl, data.text);
-                        chrome.storage.local.remove('cc_transfer_payload');
-                        showToast(LANG_DATA[window.ccManager.lang].toast_autofill);
+                        sessionStorage.setItem('cc_last_consumed_ts', data.timestamp);
+                        showToast(LANG_DATA[state.lang].toast_autofill);
                     } else {
                         attempts++;
                         if (attempts >= maxAttempts) {
@@ -3904,20 +4566,136 @@
         });
     }
 
+    function fixGeminiDropZone() {
+        const host = location.hostname;
+
+        const isGemini = host === 'gemini.google.com';
+        const isGrok = host === 'x.ai' || host === 'www.x.ai' || host === 'grok.com' || host === 'www.grok.com';
+        const isClaude = host === 'claude.ai' || host === 'www.claude.ai';
+
+        if (!isGemini && !isGrok && !isClaude) return;
+
+        const flag =
+            isGemini ? '__ccDropShimGemini' :
+                isGrok ? '__ccDropShimGrok' :
+                    '__ccDropShimClaude';
+
+        if (window[flag]) return;
+        window[flag] = true;
+
+        const isInCCUI = (t) =>
+            t && t.closest && t.closest('#cc-modal, .cc-modal, #cc-drone-fab, .cc-floating-ui, .cc-basket-item');
+
+        const hasTextPayload = (dt) => {
+            const types = dt?.types ? Array.from(dt.types) : [];
+            const hasText = types.includes('text/plain') || types.includes('text');
+            const hasFiles = types.includes('Files') || (dt?.files && dt.files.length > 0);
+            return hasText && !hasFiles;
+        };
+
+        const isNearInput = (t) => {
+            if (!t || !t.closest) return false;
+
+            if (isGemini) {
+                return !!t.closest('input-container, input-area-v2, .text-input-field, rich-textarea, .ql-editor, .input-area');
+            }
+            if (isGrok) {
+                return !!t.closest('form, textarea, [contenteditable="true"], [role="textbox"], footer, .chat, .composer, .prompt');
+            }
+            return !!t.closest('[data-testid="chat-input-grid-container"], [data-testid="chat-input"], fieldset, main');
+        };
+
+        const getTargetEditor = () => {
+            if (isGemini) return document.querySelector('.ql-editor[contenteditable="true"]');
+            if (isClaude) return document.querySelector('[data-testid="chat-input"]');
+            return document.activeElement?.isContentEditable
+                ? document.activeElement
+                : (document.querySelector('[contenteditable="true"]') || document.querySelector('textarea'));
+        };
+
+        document.addEventListener('dragover', (e) => {
+            if (isInCCUI(e.target)) return;
+            if (!isNearInput(e.target)) return;
+            if (!hasTextPayload(e.dataTransfer)) return;
+            if (draggedItem) {
+                e.preventDefault();
+                return;
+            }
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+        }, true);
+
+        document.addEventListener('drop', (e) => {
+            if (isInCCUI(e.target)) return;
+            if (!isNearInput(e.target)) return;
+            if (!hasTextPayload(e.dataTransfer)) return;
+
+            const editor = getTargetEditor();
+            if (!editor) return;
+
+            let text = '';
+            try {
+                text = (e.dataTransfer?.getData('text/plain') || e.dataTransfer?.getData('text') || '').trim();
+            } catch { }
+
+            if (!text) return;
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            autoFillInput(editor, text);
+
+            showToast(LANG_DATA[state.lang]?.toast_autofill || "Auto-filled by Context-Carry.");
+            cleanUpSiteOverlays();
+        }, true);
+    }
+
     function autoFillInput(element, text) {
+        if (!element.isContentEditable && element.querySelector('.ql-editor')) {
+            element = element.querySelector('.ql-editor');
+        }
+        if (!element.isContentEditable && element.tagName !== 'TEXTAREA' && element.tagName !== 'INPUT') {
+            const innerEditable = element.querySelector('[contenteditable="true"], [role="textbox"], textarea, input');
+            if (innerEditable) {
+                element = innerEditable;
+            }
+        }
         element.focus();
-        if (element.contentEditable === "true") {
-            const selection = window.getSelection();
-            const range = document.createRange();
-            range.selectNodeContents(element);
-            range.collapse(false);
-            selection.removeAllRanges();
-            selection.addRange(range);
-            const success = document.execCommand('insertText', false, text);
+
+        const isContentEditable = element.isContentEditable ||
+            element.contentEditable === "true" ||
+            element.getAttribute('role') === 'textbox';
+
+        if (isContentEditable) {
+            let success = false;
+            if (element.classList.contains('ql-editor') && element.innerText.trim() === '') {
+                const safeText = escapeHTML(text);
+                element.innerHTML = `<p>${safeText}</p>`;
+                success = true;
+            } else {
+                const selection = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(element);
+                range.collapse(false);
+                selection.removeAllRanges();
+                selection.addRange(range);
+
+                success = document.execCommand('insertText', false, text);
+
+                if (!success) {
+                    if (element.innerText.trim() === '') {
+                        element.innerHTML = `<p>${escapeHTML(text)}</p>`;
+                    } else {
+                        element.textContent += text;
+                    }
+                }
+            }
 
             if (!success) {
                 if (element.innerText.trim() === '') {
-                    element.innerHTML = `<p>${text}</p>`;
+                    const safeText = text.replace(/[&<>'"]/g,
+                        tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag]));
+                    element.innerHTML = `<p>${safeText}</p>`;
                 } else {
                     element.textContent += text;
                 }
@@ -3931,8 +4709,14 @@
             }
         }
 
+        const tracker = element._valueTracker;
+        if (tracker) {
+            tracker.setValue(text);
+        }
+
         element.dispatchEvent(new Event('input', { bubbles: true }));
         element.dispatchEvent(new Event('change', { bubbles: true }));
+        element.dispatchEvent(new Event('textInput', { bubbles: true }));
 
         const originalBg = element.style.backgroundColor;
         element.style.transition = "background-color 0.5s";
@@ -3942,16 +4726,16 @@
         }, 1000);
     }
 
-    function showToast(message) {
-        const toast = document.createElement('div');
+    function showToast(message, targetDoc = document) {
+        const toast = targetDoc.createElement('div');
         toast.innerText = message;
         Object.assign(toast.style, {
             position: 'fixed', bottom: '20px', left: '50%', transform: 'translateX(-50%)',
             background: '#333', color: '#fff', padding: '10px 20px', borderRadius: '20px',
-            zIndex: '2147483647', boxShadow: '0 4px 10px rgba(0,0,0,0.3)', fontSize: '14px',
-            opacity: '0', transition: 'opacity 0.3s'
+            zIndex: '2147483660', boxShadow: '0 4px 10px rgba(0,0,0,0.5)', fontSize: '12px',
+            opacity: '0', transition: 'opacity 0.3s', border: '1px solid #555'
         });
-        document.body.appendChild(toast);
+        targetDoc.body.appendChild(toast);
         requestAnimationFrame(() => toast.style.opacity = '1');
         setTimeout(() => {
             toast.style.opacity = '0';
@@ -3959,10 +4743,216 @@
         }, 3000);
     }
 
+    function refreshUIAfterUnlock() {
+        state.isUnlocked = true;
+        const t = LANG_DATA[state.lang];
+
+        const robotPanel = document.getElementById('cc-robot-panel');
+        if (robotPanel) {
+            const antenna = robotPanel.querySelector('.antenna-group');
+            if (antenna) {
+                antenna.style.opacity = '1';
+                antenna.title = t.ai_setting_tab;
+            }
+
+            const inputDeck = robotPanel.querySelector('.input-deck');
+            if (inputDeck && !inputDeck.querySelector('#mech-ai-trigger')) {
+                const aiTrigger = document.createElement('button');
+                aiTrigger.id = 'mech-ai-trigger';
+                aiTrigger.className = 'ai-trigger-btn';
+                aiTrigger.innerText = '✨';
+                aiTrigger.title = t.btn_summary;
+                aiTrigger.onclick = handleAiSummary;
+                inputDeck.appendChild(aiTrigger);
+            }
+
+            const visor = robotPanel.querySelector('.visor');
+            if (visor && !visor.querySelector('#mech-comms-btn')) {
+                const commsBtn = document.createElement('button');
+                commsBtn.id = 'mech-comms-btn';
+                commsBtn.className = 'comms-btn';
+                commsBtn.innerHTML = `<span class="icon">📶</span> ${t.robot_comms_tab}`;
+                commsBtn.title = t.ai_response_tab;
+                commsBtn.onclick = () => {
+                    if (state.streamingModal && state.streamingModal.element) {
+                        state.streamingModal.restore();
+                    } else {
+                        const ctx = state.lastAiContext || "";
+                        const cfg = state.lastAiConfig || state.aiConfig;
+                        chrome.storage.local.get(['cc_last_layout_mode'], (res) => {
+                            const savedMode = res.cc_last_layout_mode || 'single';
+                            showStreamingResponseModalMulti(ctx, cfg, savedMode);
+                        });
+                    }
+                };
+                visor.appendChild(commsBtn);
+            }
+        }
+
+        const stdPanel = document.getElementById('cc-panel');
+        if (stdPanel) {
+            const aiTab = stdPanel.querySelector('.cc-ai-tab');
+            const resTab = stdPanel.querySelector('.cc-res-tab');
+            if (aiTab) aiTab.style.display = 'flex';
+            if (resTab) resTab.style.display = 'flex';
+
+            const aiToolsRow = stdPanel.querySelector('.cc-tools:nth-of-type(2)');
+            if (aiToolsRow && !aiToolsRow.querySelector('button')) {
+                const btnSummary = document.createElement('button');
+                btnSummary.className = 'tool-btn btn-ai-low';
+                btnSummary.textContent = t.btn_summary;
+                btnSummary.onclick = () => { handleAiSummary(); };
+                aiToolsRow.appendChild(btnSummary);
+            }
+        }
+
+        loadAiConfig();
+    }
+
+    function showFeatureUnlockModal(targetDoc = document, customWarning = null, onSuccess = null) {
+        if (targetDoc.querySelector('.cc-unlock-overlay')) return;
+        const t = LANG_DATA[state.lang];
+
+        const isLight = state.theme === 'light';
+        const bgOverlay = isLight ? 'rgba(255, 255, 255, 0.8)' : 'rgba(0, 0, 0, 0.8)';
+        const bgCard = isLight ? '#ffffff' : '#1e1e1e';
+        const textColor = isLight ? '#333' : '#fff';
+        const borderColor = isLight ? '#ccc' : '#444';
+        const textSubColor = isLight ? '#666' : '#ccc';
+        const textBg = isLight ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)';
+
+        const overlay = targetDoc.createElement('div');
+        overlay.className = 'cc-unlock-overlay';
+        Object.assign(overlay.style, {
+            position: 'fixed', top: '0', left: '0', width: '100%', height: '100%',
+            background: bgOverlay, zIndex: '2147483660',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backdropFilter: 'blur(5px)', opacity: '0', transition: 'opacity 0.3s'
+        });
+
+        const card = targetDoc.createElement('div');
+        Object.assign(card.style, {
+            width: '340px', background: bgCard, border: `1px solid ${borderColor}`,
+            borderTop: '3px solid #ff9800', borderRadius: '8px', padding: '20px',
+            boxShadow: '0 10px 40px rgba(0,0,0,0.5)', color: textColor,
+            fontFamily: 'Segoe UI, sans-serif', display: 'flex', flexDirection: 'column', gap: '15px'
+        });
+
+        const warningMsg = customWarning || t.unlock_warning;
+
+        card.innerHTML = `
+            <div style="font-size:14px; font-weight:bold; color:#ff9800; display:flex; align-items:center; gap:8px;">
+                <span>${t.unlock_title}</span>
+            </div>
+            <div style="font-size:11px; color:${textSubColor}; line-height:1.5; background:${textBg}; padding:10px; border-radius:4px; max-height:300px; overflow-y:auto;">
+                ${warningMsg}
+            </div>
+            
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:5px;">
+                <button id="btn-cancel-unlock" style="background:transparent; border:1px solid ${borderColor}; color:${textSubColor}; padding:6px 12px; cursor:pointer; border-radius:4px; font-size:11px;">
+                    ${t.unlock_cancel}
+                </button>
+                <button id="btn-confirm-unlock" style="background:#ff9800; border:none; color:#000; padding:6px 12px; cursor:pointer; border-radius:4px; font-weight:bold; font-size:11px;">
+                    ${t.unlock_confirm}
+                </button>
+            </div>
+        `;
+
+        overlay.appendChild(card);
+        targetDoc.body.appendChild(overlay);
+
+        requestAnimationFrame(() => overlay.style.opacity = '1');
+
+        const btnSave = card.querySelector('#btn-confirm-unlock');
+        const btnCancel = card.querySelector('#btn-cancel-unlock');
+
+        btnCancel.onclick = () => {
+            overlay.style.opacity = '0';
+            setTimeout(() => {
+                overlay.remove();
+                if (targetDoc !== document) {
+                    targetDoc.defaultView.close();
+                }
+            }, 300);
+        };
+
+        btnSave.onclick = () => {
+            btnSave.innerText = t.unlock_enabling;
+            chrome.storage.local.set({ 'cc_feature_unlock': true }, () => {
+                state.isUnlocked = true;
+                showToast(t.unlock_toast_success, targetDoc);
+                overlay.remove();
+                refreshUIAfterUnlock();
+
+                if (onSuccess) {
+                    onSuccess();
+                } else {
+                    const robotPanel = document.getElementById('cc-robot-panel');
+                    const stdPanel = document.getElementById('cc-panel');
+                    if (robotPanel) robotPanel.remove();
+                    if (stdPanel) stdPanel.remove();
+                    state.active = false;
+                    if (state.interval) clearInterval(state.interval);
+                    setTimeout(() => openInterface(), 200);
+                }
+            });
+        };
+    }
+
     chrome.storage.onChanged.addListener((changes, namespace) => {
-        if (namespace === 'local' && changes.cc_basket) {
-            updateBasketUI();
-            calculateTotalTokens();
+        if (namespace === 'local') {
+            if (changes.cc_basket || changes.cc_folders || changes.cc_links) {
+
+                if (changes.cc_basket) {
+                    basket = changes.cc_basket.newValue || [];
+                }
+
+                updateBasketUI();
+                syncPiPIfOpen();
+
+                if (changes.cc_basket) {
+                    calculateTotalTokens();
+
+                    const newBasket = basket;
+                    const count = newBasket.length;
+
+                    const droneBadge = document.querySelector('.cc-drone-badge');
+                    if (droneBadge) {
+                        droneBadge.innerText = count > 99 ? '99+' : count;
+                        droneBadge.style.display = count > 0 ? 'flex' : 'none';
+
+                        const drone = document.getElementById('cc-transport-drone');
+                        if (drone) {
+                            drone.style.filter = "brightness(1.3)";
+                            setTimeout(() => drone.style.filter = "", 300);
+                        }
+                    }
+
+                    if (typeof updateRobotBasketText === 'function') {
+                        updateRobotBasketText(count);
+                    }
+
+                    if (typeof updateDroneVisuals === 'function') {
+                        updateDroneVisuals();
+                    }
+                }
+            }
+
+            if (changes.cc_disabled_domains) {
+                const disabledList = changes.cc_disabled_domains.newValue || [];
+                const currentHost = window.location.hostname;
+
+                if (disabledList.includes(currentHost)) {
+                    const drone = document.getElementById('cc-drone-fab');
+                    if (drone) {
+                        drone.style.transform = "scale(0)";
+                        setTimeout(() => drone.remove(), 200);
+                    }
+                    const hoverCard = document.querySelector('.cc-hover-card');
+                    if (hoverCard) hoverCard.remove();
+                    state.droneDismissed = true;
+                }
+            }
         }
     });
 
@@ -3977,6 +4967,7 @@
         else if (request.action === "BASKET_UPDATED") {
             updateBasketUI();
             calculateTotalTokens();
+            syncPiPIfOpen();
         }
         return false;
     });
@@ -3996,7 +4987,7 @@
             // Alt+C: activate area selection mode
             if (key === 'KeyC') {
                 e.preventDefault();
-                if (!window.ccManager.active) {
+                if (!state.active) {
                     openInterface();
                 }
                 toggleSelectionMode();
@@ -4006,7 +4997,7 @@
             // Alt+L: toggle language between zh and en
             if (key === 'KeyL') {
                 e.preventDefault();
-                const oldLang = window.ccManager.lang;
+                const oldLang = state.lang;
                 const newLang = oldLang === 'zh' ? 'en' : 'zh';
                 const currentInput = prefixInput?.value?.trim() || '';
                 const oldDefault = LANG_DATA[oldLang].default_prompt.trim();
@@ -4014,7 +5005,7 @@
                     prefixInput.value = LANG_DATA[newLang].default_prompt;
                     flashInput(prefixInput);
                 }
-                window.ccManager.lang = newLang;
+                state.lang = newLang;
                 updateUITexts();
             }
             // Alt+M: toggle the panel visibility
@@ -4058,7 +5049,7 @@
         paintSvg.addEventListener('mousedown', startDraw);
         document.addEventListener('keydown', onEscKey);
 
-        const t = LANG_DATA[window.ccManager.lang];
+        const t = LANG_DATA[state.lang];
         showToast(t.toast_enter_paint || "Draw to select text (ESC to exit)");
     }
 
@@ -4128,7 +5119,7 @@
         if (capturedText && capturedText.length > 0) {
             showPreviewModal(capturedText);
         } else {
-            const t = LANG_DATA[window.ccManager.lang];
+            const t = LANG_DATA[state.lang];
             showToast(t.paint_no_text);
             setTimeout(closeSelectionMode, 500);
         }
@@ -4252,104 +5243,6 @@
         return resultText.trim();
     }
 
-    function onMouseDown(e) {
-        e.preventDefault();
-        startX = e.clientX;
-        startY = e.clientY;
-
-        Object.assign(selectionBox.style, {
-            left: startX + 'px', top: startY + 'px', width: '0', height: '0', display: 'block'
-        });
-
-        selectionOverlay.addEventListener('mousemove', onMouseMove);
-        selectionOverlay.addEventListener('mouseup', onMouseUp);
-    }
-
-    function onMouseMove(e) {
-        const currentX = e.clientX;
-        const currentY = e.clientY;
-        const width = Math.abs(currentX - startX);
-        const height = Math.abs(currentY - startY);
-        const left = Math.min(currentX, startX);
-        const top = Math.min(currentY, startY);
-
-        Object.assign(selectionBox.style, {
-            width: width + 'px', height: height + 'px',
-            left: left + 'px', top: top + 'px'
-        });
-    }
-
-    function onMouseUp(e) {
-        selectionOverlay.removeEventListener('mousemove', onMouseMove);
-        selectionOverlay.removeEventListener('mouseup', onMouseUp);
-
-        const rect = selectionBox.getBoundingClientRect();
-        selectionBox.style.display = 'none';
-        const capturedText = extractTextFromRect(rect);
-        if (capturedText && capturedText.length > 0) {
-            showPreviewModal(capturedText);
-        } else {
-            const t = LANG_DATA[window.ccManager.lang];
-            showToast(t.paint_no_text);
-            closeSelectionMode();
-        }
-    }
-
-    function extractTextFromRect(selectionRect) {
-        const walker = document.createTreeWalker(
-            document.body,
-            NodeFilter.SHOW_TEXT,
-            {
-                acceptNode: (node) => {
-                    if (!node.textContent.trim()) return NodeFilter.FILTER_REJECT;
-
-                    const parent = node.parentElement;
-                    if (!parent || parent.closest('#cc-panel') || parent.closest('#cc-selection-overlay') || parent.closest('#cc-tooltip')) {
-                        return NodeFilter.FILTER_REJECT;
-                    }
-
-                    if (parent.offsetParent === null) return NodeFilter.FILTER_REJECT;
-
-                    const range = document.createRange();
-                    range.selectNode(node);
-                    const rect = range.getBoundingClientRect();
-
-                    return (rect.bottom > selectionRect.top &&
-                        rect.top < selectionRect.bottom &&
-                        rect.right > selectionRect.left &&
-                        rect.left < selectionRect.right)
-                        ? NodeFilter.FILTER_ACCEPT
-                        : NodeFilter.FILTER_REJECT;
-                }
-            }
-        );
-
-        let resultText = "";
-        let lastParent = null;
-
-        while (walker.nextNode()) {
-            const node = walker.currentNode;
-            const parent = node.parentElement;
-            let text = node.textContent;
-
-            const isBlock = isBlockElement(parent);
-            if (isBlock && parent !== lastParent && resultText.length > 0) {
-                resultText += "\n";
-                if (parent.tagName === 'P') resultText += "\n";
-            } else if (!isBlock && parent !== lastParent && resultText.length > 0) {
-                if (!resultText.endsWith(' ') && !resultText.endsWith('\n') && !text.startsWith(' ')) {
-                    resultText += " ";
-                }
-            }
-            text = text.replace(/\s+/g, ' ');
-
-            resultText += text;
-            lastParent = parent;
-        }
-
-        return resultText.trim();
-    }
-
     function isBlockElement(el) {
         if (!el) return false;
         const style = window.getComputedStyle(el);
@@ -4363,7 +5256,7 @@
     }
 
     function showPreviewModal(text) {
-        const t = LANG_DATA[window.ccManager.lang];
+        const t = LANG_DATA[state.lang];
         const modalMask = document.createElement('div');
         Object.assign(modalMask.style, {
             position: 'fixed', top: '0', left: '0', width: '100vw', height: '100vh',
@@ -4459,17 +5352,17 @@
         btnConfirm.onclick = () => {
             const finalText = textarea.value.trim();
             if (finalText) {
-                getBasket((basket) => {
-                    basket.push({
+                basketOp({
+                    kind: 'ADD',
+                    item: {
                         text: finalText,
                         timestamp: Date.now(),
                         source: window.location.hostname + t.source_area_select
-                    });
-                    chrome.storage.local.set({ 'cc_basket': basket }, () => {
-                        showToast(t.toast_basket_add);
-                        updateBasketUI();
-                        calculateTotalTokens();
-                    });
+                    }
+                }, () => {
+                    showToast(t.toast_basket_add);
+                    updateBasketUI();
+                    calculateTotalTokens();
                 });
             }
             modalMask.remove();
@@ -4487,469 +5380,1354 @@
        9. AI Drawer Logic & Helpers (New Integrated UI)
     ========================================= */
 
-    window.toggleAiSettingsInDrawer = function (container) {
-        if (window.renderCompactSettings) {
-            window.renderCompactSettings(container);
+    function toggleAiSettingsInDrawer(container) {
+        if (typeof renderCompactSettings === 'function') {
+            renderCompactSettings(container);
         } else {
             console.error("renderCompactSettings not found");
         }
     };
 
-    window.restoreDrawerContent = function (container) {
-        if (!container) container = document.querySelector('.cc-ai-content');
-        if (!container) return;
-        const t = LANG_DATA[window.ccManager.lang];
-        container.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid var(--cc-border); padding-bottom:8px;">
-                <div style="font-weight:bold; font-size:14px;">🤖 AI 助手</div>
-                <button id="btn-close-drawer" style="background:none; border:none; cursor:pointer; font-size:16px; color:var(--cc-text-sub); padding:0 4px;">◀</button>
-            </div>
-
-            <div id="ai-response-area" style="flex:1; overflow-y:auto; font-size:12px; margin-bottom:8px; white-space:pre-wrap; color:var(--cc-text); line-height:1.5;"></div>
-            
-            <div style="border-top:1px solid var(--cc-border); padding-top:8px;">
-                 <button id="btn-ai-config" style="width:100%; padding:6px; background:var(--cc-btn-bg); border:1px solid var(--cc-border); border-radius:6px; cursor:pointer; font-size:11px; color:var(--cc-text);">⚙️ 設定 API Key</button>
-            </div>
-        `;
-
-        const responseArea = container.querySelector('#ai-response-area');
-        if (responseArea) {
-            responseArea.textContent = window.ccManager.lastAiResponse || t.status_ready;
-        }
-
-        const configBtn = container.querySelector('#btn-ai-config');
-        if (configBtn) configBtn.onclick = () => window.toggleAiSettingsInDrawer(container);
-
-        const closeBtn = container.querySelector('#btn-close-drawer');
-        if (closeBtn) {
-            closeBtn.onclick = () => {
-                const drawer = document.getElementById('cc-ai-drawer-panel');
-                const tab = document.querySelector('.cc-ai-tab');
-                if (drawer) drawer.classList.remove('open');
-                if (tab) tab.classList.remove('active');
-                const resTab = document.querySelector('.cc-res-tab');
-                if (resTab) resTab.style.display = 'flex';
-            };
-        }
-    };
-
     function loadAiConfig() {
-        chrome.storage.local.get(['cc_ai_config'], (result) => {
-            const config = result.cc_ai_config || {};
-            window.ccManager.aiConfig = config;
+        chrome.storage.local.get(['cc_all_ai_configs', 'cc_active_ai_config_name', 'cc_ai_config'], (result) => {
+            let allConfigs = result.cc_all_ai_configs || [];
+            let activeConfig = null;
+            if (allConfigs.length === 0) {
+                const single = result.cc_ai_config || {};
+                if (single && Object.keys(single).length > 0) {
+                    const defaultName = single.name || 'Default';
+                    allConfigs = [{ ...single, name: defaultName }];
+                    activeConfig = allConfigs[0];
+                    chrome.storage.local.set({
+                        'cc_all_ai_configs': allConfigs,
+                        'cc_active_ai_config_name': defaultName
+                    });
+                }
+            }
+
+            if (!activeConfig) {
+                const activeName = result.cc_active_ai_config_name;
+                if (activeName) {
+                    activeConfig = allConfigs.find(c => c.name === activeName);
+                }
+                if (!activeConfig && allConfigs.length > 0) {
+                    activeConfig = allConfigs[0];
+                    chrome.storage.local.set({ 'cc_active_ai_config_name': activeConfig.name });
+                }
+            }
+
+            state.allAiConfigs = allConfigs;
+            state.aiConfig = activeConfig || {};
+
             const btn = document.querySelector('.tool-btn.btn-ai-low, .tool-btn.btn-ai-high');
             if (btn) {
-                if (config.configured) {
+                if (activeConfig && activeConfig.configured) {
                     btn.classList.remove('btn-ai-low');
                     btn.classList.add('btn-ai-high');
-                    btn.innerHTML = '✨ AI Summary';
+                    btn.innerHTML = `✨ AI Summary`;
                 } else {
                     btn.classList.remove('btn-ai-high');
                     btn.classList.add('btn-ai-low');
-                    btn.textContent = LANG_DATA[window.ccManager.lang].btn_summary;
+                    btn.textContent = LANG_DATA[state.lang].btn_summary;
                 }
             }
         });
     }
 
     function handleAiSummary() {
-        const t = LANG_DATA[window.ccManager.lang];
+        const t = LANG_DATA[state.lang];
 
-        if (!window.ccManager.aiConfig || !window.ccManager.aiConfig.configured) {
-            if (window.ccManager.uiMode === 'robot') {
-                openRobotSettings();
-                showToast("Please configure AI uplink first. 📡");
-            } else {
-                const drawer = document.getElementById('cc-ai-drawer-panel');
-                if (drawer) {
-                    const aiTab = document.querySelector('.cc-ai-tab');
-                    if (aiTab) aiTab.click();
+        if (!state.aiConfig || !state.aiConfig.configured) {
+            loadAiConfig();
+            setTimeout(() => {
+                if (!state.aiConfig || !state.aiConfig.configured) {
+                    if (state.isPiPActive && state.pipWindow) {
+                        const btnSettings = state.pipWindow.document.getElementById('btn-pip-settings');
+                        if (btnSettings) btnSettings.click();
+                        showToast("Please configure AI settings first.");
+                    } else if (state.uiMode === 'robot') {
+                        openRobotSettings();
+                        showToast("Please configure AI uplink first. 📡");
+                    } else {
+                        const drawer = document.getElementById('cc-ai-drawer-panel');
+                        if (drawer) {
+                            const aiTab = document.querySelector('.cc-ai-tab');
+                            if (aiTab) aiTab.click();
+                        }
+                        showToast(t.ai_unconfigured || "Please configure AI settings first.");
+                    }
+                } else {
+                    handleAiSummary();
                 }
-                alert(t.ai_unconfigured || "Please configure AI settings first.");
-            }
+            }, 100);
+            return;
+        }
+
+        const { ok, msg } = validateApiKey(state.aiConfig.provider, state.aiConfig.apiKey);
+        if (!ok && state.aiConfig.provider !== 'local') {
+            showToast(t.ai_unconfigured || `API Key Error: ${msg}`);
+            if (state.uiMode === 'robot') openRobotSettings();
             return;
         }
 
         resolveContentToExport((finalContent) => {
+            if (state.isPiPActive && state.pipWindow) {
+                const win = state.pipWindow;
+                win.focus();
+
+                const tabFlow = win.document.getElementById('tab-flow');
+                if (tabFlow) tabFlow.click();
+
+                if (finalContent) {
+                    state.multiPanelConfigs.push({
+                        id: Date.now(),
+                        context: finalContent,
+                        config: state.aiConfig || {},
+                        x: 50, y: 50,
+                        responseText: "",
+                        runCount: 0
+                    });
+                    renderPiPNodes(win);
+                }
+                return;
+            }
+
             if (!finalContent) return;
-            const controller = showStreamingResponseModal(finalContent, window.ccManager.aiConfig);
-            callAiStreaming(finalContent, window.ccManager.aiConfig, controller);
+            if (typeof showStreamingResponseModalMulti === 'function') {
+                showStreamingResponseModalMulti(finalContent, state.aiConfig, 'single', true);
+            }
         });
     }
 
     function validateApiKey(provider, key) {
-        if (!key) {
-            return { ok: false, msg: 'API Key is empty' };
+        const isLocal = (provider === 'local' || provider === 'ollama' || provider === 'lm-studio' || provider === 'lm_studio');
+
+        if (!key && !isLocal) {
+            return { ok: false, msg: 'API Key is required.' };
         }
 
-        if (provider === 'local') {
+        if (isLocal) {
             return { ok: true };
         }
 
         if (key.length < 20) {
-            return { ok: false, msg: 'API Key looks too short' };
+            return { ok: false, msg: 'API Key looks too short.' };
         }
 
         if (provider === 'openai' && !key.startsWith('sk-')) {
-            return { ok: false, msg: 'OpenAI key should start with "sk-"' };
+            return { ok: false, msg: 'OpenAI key should start with "sk-".' };
         }
 
-        if (provider === 'claude' && !key.startsWith('sk-') && !key.startsWith('claude-')) {
-            return { ok: false, msg: 'Claude key format looks invalid' };
+        if (provider === 'claude' && !key.startsWith('sk-ant-')) {
+            return { ok: false, msg: 'Claude key should start with "sk-ant-".' };
         }
 
         return { ok: true };
     }
 
-    function showStreamingResponseModal(originalContext, aiConfig) {
-        const t = LANG_DATA[window.ccManager.lang];
-        if (window.ccManager.streamingModal && window.ccManager.streamingModal.element) {
-            if (window.ccManager.streamingModal.isMinimized) {
-                window.ccManager.streamingModal.restore();
-            }
-            window.ccManager.streamingModal.element.remove();
+    function showStreamingResponseModalMulti(originalContext, aiConfig, initialMode = null, autoStart = false) {
+        const t = LANG_DATA[state.lang];
+        const isZh = state.lang === 'zh';
+
+        if (initialMode) {
+            state.aiLayoutMode = initialMode;
+        } else if (!state.aiLayoutMode) {
+            state.aiLayoutMode = 'single';
         }
 
-        const createModelInfoEl = (cfg) => {
-            if (!cfg) return document.createTextNode('');
-            const p = cfg.provider || 'AI';
-            const m = cfg.model || 'Auto';
-            const small = document.createElement('small');
-            small.style.cssText = "font-weight:normal; opacity:0.7; margin-left:8px; font-size:11px; background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:4px;";
-            small.textContent = `${p} · ${m}`;
-            return small;
-        };
+        if (!state.loopSetting) state.loopSetting = 1;
 
-        const commonTextStyle = `
-            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            font-size: 13px;
-            line-height: 1.6;
-            color: #e0e6ed;
-            letter-spacing: 0.3px;
-        `;
+        if (!state.multiPanelConfigs) state.multiPanelConfigs = [];
+
+        if (!state.singleViewConfig) {
+            state.singleViewConfig = {
+                id: 'single-node',
+                context: originalContext || "",
+                config: aiConfig || state.aiConfig || {},
+                isStreaming: false,
+                responseText: "",
+                runCount: 0
+            };
+        } else if (originalContext && state.aiLayoutMode === 'single') {
+            state.singleViewConfig.context = originalContext;
+            state.singleViewConfig.config = aiConfig || state.aiConfig || {};
+        }
+
+        if (state.multiPanelConfigs.length === 0) {
+            state.multiPanelConfigs.push({
+                id: Date.now(),
+                context: "",
+                config: aiConfig || state.aiConfig || {},
+                x: 100, y: 100,
+                isStreaming: false,
+                responseText: "",
+                runCount: 0
+            });
+            state.workflowConnections = [];
+        }
+
+        if (state.streamingModal && state.streamingModal.element) {
+            state.streamingModal.element.remove();
+        }
+
         const mask = document.createElement('div');
         mask.className = 'cc-modal-mask';
 
-        const card = document.createElement('div');
-        card.className = 'cc-modal-card';
+        let targetParent = document.body;
 
-        Object.assign(card.style, {
-            width: '900px',
-            maxWidth: '95vw',
-            height: '80vh',
-            display: 'flex',
-            flexDirection: 'column'
-        });
+        if (state.isPiPActive && state.pipWindow) {
+            targetParent = state.pipWindow.document.body;
+            mask.classList.add('pip-mode');
+        }
+
+        const cardEl = document.createElement('div');
+        cardEl.className = 'cc-modal-card';
 
         const header = document.createElement('div');
         header.className = 'cc-modal-header';
 
-        const titleDiv = document.createElement('div');
-        titleDiv.style.fontWeight = 'bold';
-        titleDiv.style.display = 'flex';
-        titleDiv.style.alignItems = 'center';
-        titleDiv.append(document.createTextNode(`🤖 ${t.ai_modal_title}`));
-        titleDiv.append(createModelInfoEl(aiConfig));
-        const minTitle = document.createElement('span');
-        minTitle.className = 'min-title';
-        minTitle.style.display = 'none';
-        minTitle.innerText = '🤖 AI Processing...';
-
-        const controls = document.createElement('div');
-        controls.className = 'min-controls';
-
-        const btnMin = document.createElement('button');
-        btnMin.innerHTML = '─';
-        Object.assign(btnMin.style, { background: 'transparent', border: 'none', color: '#ccc', fontSize: '16px', cursor: 'pointer', padding: '0 8px' });
-        btnMin.onclick = (e) => {
-            e.stopPropagation();
-            mask.style.display = 'none';
-            window.ccManager.streamingModal.isMinimized = true;
+        const updateCardStyle = () => {
+            const isSingle = state.aiLayoutMode === 'single';
+            if (isSingle) {
+                Object.assign(cardEl.style, {
+                    width: '800px', maxWidth: '95vw', height: '75vh',
+                    display: 'flex', flexDirection: 'column', transition: 'all 0.3s ease'
+                });
+            } else {
+                Object.assign(cardEl.style, {
+                    width: '98vw', height: '95vh', maxWidth: 'none',
+                    display: 'flex', flexDirection: 'column', transition: 'all 0.3s ease'
+                });
+            }
         };
+        updateCardStyle();
 
-        const btnClose = document.createElement('button');
-        btnClose.innerHTML = '✕';
-        Object.assign(btnClose.style, { background: 'transparent', border: 'none', color: '#ccc', fontSize: '16px', cursor: 'pointer', padding: '0 8px' });
-        btnClose.onclick = (e) => {
-            e.stopPropagation();
-            mask.remove();
-            window.ccManager.streamingModal = null;
-        };
-
-        controls.append(btnMin, btnClose);
-        header.append(titleDiv, minTitle, controls);
-
-        const tabs = document.createElement('div');
-        tabs.className = 'cc-modal-tabs';
-
-        const tabRes = document.createElement('button');
-        tabRes.className = 'cc-modal-tab active';
-        tabRes.innerText = t.ai_tab_res;
-
-        const tabCtx = document.createElement('button');
-        tabCtx.className = 'cc-modal-tab';
-        tabCtx.innerText = t.ai_tab_ctx;
-
-        tabs.append(tabRes, tabCtx);
-        const resContainer = document.createElement('div');
-        resContainer.className = 'cc-modal-content';
-        resContainer.style.padding = '0';
-        resContainer.style.display = 'flex';
-        resContainer.style.flexDirection = 'column';
-        resContainer.style.position = 'relative';
-        resContainer.style.flex = '1';
-        const btnCopyIcon = document.createElement('button');
-        btnCopyIcon.textContent = '📋';
-        btnCopyIcon.title = "Copy Response";
-        Object.assign(btnCopyIcon.style, {
-            position: 'absolute', top: '10px', right: '10px',
-            background: 'rgba(0,0,0,0.5)', border: '1px solid #555', borderRadius: '4px',
-            color: '#fff', cursor: 'pointer', padding: '4px 8px', zIndex: '10'
-        });
-        btnCopyIcon.onclick = () => {
-            const text = resContent.innerText;
-            navigator.clipboard.writeText(text).then(() => {
-                btnCopyIcon.innerHTML = '✅';
-                setTimeout(() => btnCopyIcon.innerHTML = '📋', 1500);
-            });
-        };
-
-        const resContent = document.createElement('div');
-        resContent.style.cssText = `flex: 1; overflow-y: auto; padding: 20px; white-space: pre-wrap; ${commonTextStyle}`;
-        resContent.innerText = "Connecting to AI...";
-
-        resContainer.append(btnCopyIcon, resContent);
-
-        const ctxContainer = document.createElement('div');
-        ctxContainer.className = 'cc-modal-content';
-        ctxContainer.style.display = 'none';
-        ctxContainer.style.flexDirection = 'column';
-        ctxContainer.style.flex = '1';
-        ctxContainer.style.padding = '10px';
-
-        const ctxTextarea = document.createElement('textarea');
-        ctxTextarea.style.cssText = `
-            flex: 1; 
-            background: #111; 
-            border: 1px solid #333;
-            resize: none; 
-            padding: 20px; 
-            margin-bottom: 8px;
-            outline: none;
-            border-radius: 4px;
-            ${commonTextStyle}
+        const toolbarStyles = `
+            <style>
+                .cc-toolbar-group {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    background: rgba(255, 255, 255, 0.05);
+                    padding: 4px 8px;
+                    border-radius: 6px;
+                    border: 1px solid rgba(255, 255, 255, 0.1);
+                }
+                .cc-toolbar-btn {
+                    background: transparent;
+                    border: 1px solid transparent;
+                    color: #e0e6ed;
+                    cursor: pointer;
+                    padding: 4px 8px;
+                    border-radius: 4px;
+                    font-size: 12px;
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                    transition: all 0.2s;
+                }
+                .cc-toolbar-btn:hover {
+                    background: rgba(255, 255, 255, 0.1);
+                    border-color: rgba(255, 255, 255, 0.2);
+                }
+                .cc-toolbar-btn.primary {
+                    background: var(--cc-primary, #3b82f6);
+                    color: white;
+                }
+                .cc-toolbar-btn.danger {
+                    color: #ff5252;
+                }
+                .cc-toolbar-select {
+                    background: #111;
+                    color: #fff;
+                    border: 1px solid #444;
+                    border-radius: 4px;
+                    padding: 2px 4px;
+                    font-size: 11px;
+                    outline: none;
+                }
+            </style>
         `;
 
-        ctxTextarea.value = window.ccManager.lastAiContext || originalContext || "";
-        const actionRow = document.createElement('div');
-        actionRow.style.display = 'flex';
-        actionRow.style.gap = '8px';
-        actionRow.style.marginTop = '0';
-        const btnSettings = document.createElement('button');
-        btnSettings.innerText = t.btn_quick_settings || "⚙️ AI Settings";
-        Object.assign(btnSettings.style, {
-            padding: '10px', background: '#333', color: '#ccc',
-            border: '1px solid #555', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold',
-            flex: '0 0 auto', width: '120px'
+        header.innerHTML = toolbarStyles + `
+            <div style="font-weight:bold; display:flex; align-items:center; gap:12px; font-size: 14px; color: #fff;">
+                <span id="cc-mm-title" style="display:flex; align-items:center; gap:6px;"></span>
+                <div class="cc-toolbar-group">
+                    <button id="btn-toggle-view" class="cc-toolbar-btn" title="Toggle View"></button>
+                </div>
+            </div>
+
+            <div class="min-controls" style="display:flex; gap:12px; align-items:center;">
+                <div id="toolbar-templates" class="cc-toolbar-group">
+                    <span style="font-size:11px; color:#aaa;">🧩 Templates:</span>
+                    <select id="template-select" class="cc-toolbar-select">
+                        <option value="">-- Select --</option>
+                        ${Object.keys(WORKFLOW_TEMPLATES).map(k => `<option value="${k}">${WORKFLOW_TEMPLATES[k].name}</option>`).join('')}
+                    </select>
+                </div>
+                
+                <div id="loop-control-group" class="cc-toolbar-group">
+                    <span id="cc-mm-loop-label" style="font-size:11px; color:#aaa; font-weight:normal;"></span>
+                    <select id="loop-select" class="cc-toolbar-select">
+                        <option value="1">1 (Once)</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="5">5</option>
+                        <option value="10">10</option>
+                    </select>
+                </div>
+
+                <button id="btn-global-settings" class="cc-toolbar-btn" title="Global Settings"><span>⚙️</span></button>
+
+                <div id="canvas-controls" class="cc-toolbar-group" style="border-color: var(--cc-primary, #3b82f6);">
+                    <button id="btn-add-node" class="cc-toolbar-btn"><span>+</span> Node</button>
+                    <div style="width:1px; height:16px; background:#444;"></div>
+                    <button id="btn-run-flow" class="cc-toolbar-btn primary">▶ Run</button>
+                    <button id="btn-stop-all" class="cc-toolbar-btn danger">⏹ Stop</button>
+                </div>
+
+                <button id="btn-close-modal" class="cc-toolbar-btn" style="font-size: 14px; opacity: 0.7;">✕</button>
+            </div>
+        `;
+        setTimeout(() => {
+            const loopSel = header.querySelector('#loop-select');
+            if (loopSel) {
+                loopSel.value = state.loopSetting || 1;
+                loopSel.onchange = (e) => { state.loopSetting = parseInt(e.target.value); };
+            }
+        }, 0);
+
+        const canvasContainer = document.createElement('div');
+        canvasContainer.id = 'cc-canvas-container';
+        Object.assign(canvasContainer.style, {
+            position: 'relative', width: '100%', flex: '1', overflow: 'hidden'
         });
-        btnSettings.onclick = () => {
-            openRobotSettings();
+
+        const svgLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svgLayer.id = 'cc-connections-layer';
+        svgLayer.style.overflow = 'visible';
+        svgLayer.innerHTML = `<defs><marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#ff9800" /></marker></defs>`;
+        canvasContainer.appendChild(svgLayer);
+
+        const singleFooter = document.createElement('div');
+        singleFooter.className = 'cc-modal-footer';
+        singleFooter.style.cssText = `padding:10px; border-top:1px solid #333; background:#1e1e1e; gap:8px; align-items:center; flex-wrap:wrap; display:none;`;
+
+        const exportGroup = document.createElement('div');
+        exportGroup.style.display = 'flex'; exportGroup.style.gap = '4px'; exportGroup.style.marginRight = 'auto';
+
+        const btnExportSingle = document.createElement('button');
+        btnExportSingle.innerHTML = "📤 Export / Save";
+        btnExportSingle.title = t.pip_export_title || "Export";
+        btnExportSingle.style.cssText = "background:#333; border:1px solid #555; color:#ccc; padding:6px 12px; border-radius:4px; cursor:pointer; font-size:11px; font-weight:bold;";
+
+        btnExportSingle.onclick = () => {
+            const text = state.singleViewConfig.responseText || state.singleViewConfig.context || "";
+            if (!text) return showToast("No content to export");
+
+            const defName = `ai-response-${Date.now()}`;
+            showUniversalExportModal(window, text, defName);
         };
 
-        const btnResend = document.createElement('button');
-        btnResend.id = 'cc-btn-resend';
-        btnResend.innerText = t.btn_resend;
-        Object.assign(btnResend.style, {
-            padding: '10px', background: '#2196F3', color: '#fff',
-            border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold',
-            flex: '1'
-        });
-
-        btnResend.onclick = () => {
-            const newContext = ctxTextarea.value;
-            const currentConfig = window.ccManager.aiConfig;
-            titleDiv.innerHTML = '';
-            titleDiv.append(document.createTextNode(`🤖 ${t.ai_modal_title}`));
-            titleDiv.append(createModelInfoEl(currentConfig));
-
-            tabRes.click();
-            resContent.innerText = "Restarting AI...";
-            let isFirstChunk = true;
-
-            callAiStreaming(newContext, currentConfig, {
-                append: (txt) => {
-                    if (isFirstChunk) { resContent.innerText = ''; isFirstChunk = false; }
-                    resContent.innerText += txt;
-                    resContent.scrollTop = resContent.scrollHeight;
-                    window.ccManager.lastAiText = resContent.innerText;
-                },
-                done: () => {
-                    footer.style.display = 'flex';
-                    minTitle.innerText = "✅ AI Done";
-                    window.ccManager.lastAiText = resContent.innerText;
-                },
-                error: (e) => {
-                    if (isFirstChunk) resContent.innerText = '';
-                    const errSpan = document.createElement('div');
-                    errSpan.style.cssText = "color:#ff5252; margin-top:10px;";
-                    errSpan.textContent = `❌ Error: ${e}`;
-                    resContent.appendChild(errSpan);
-                    footer.style.display = 'flex';
-                    window.ccManager.lastAiText = resContent.innerText;
-                }
-            });
-        };
-
-        actionRow.append(btnSettings, btnResend);
-        ctxContainer.append(ctxTextarea, actionRow);
-
-        tabRes.onclick = () => {
-            tabRes.classList.add('active'); tabCtx.classList.remove('active');
-            resContainer.style.display = 'flex'; ctxContainer.style.display = 'none';
-        };
-        tabCtx.onclick = () => {
-            tabCtx.classList.add('active'); tabRes.classList.remove('active');
-            ctxContainer.style.display = 'flex'; resContainer.style.display = 'none';
-        };
-
-        const footer = document.createElement('div');
-        footer.className = 'cc-modal-footer';
-        footer.style.display = 'none';
-        footer.style.justifyContent = 'space-between';
-        footer.style.alignItems = 'center';
-
-        const leftGroup = document.createElement('div');
-        leftGroup.style.display = 'flex';
-        leftGroup.style.gap = '8px';
-        leftGroup.style.alignItems = 'center';
-
-        const fmtSelect = document.createElement('select');
-        fmtSelect.style.cssText = "background:#333; color:#fff; border:1px solid #555; padding:4px; border-radius:4px; font-size:12px; outline:none;";
-        const optTxt = document.createElement('option'); optTxt.value = 'txt'; optTxt.innerText = '.txt';
-        const optMd = document.createElement('option'); optMd.value = 'md'; optMd.innerText = '.md';
-        fmtSelect.append(optTxt, optMd);
-
-        const btnDownload = document.createElement('button');
-        btnDownload.id = 'cc-btn-save';
-        btnDownload.innerHTML = t.btn_save_file;
-        btnDownload.style.cssText = "background:#4CAF50; color:#fff; border:none; padding:5px 10px; border-radius:4px; font-size:12px; cursor:pointer; font-weight:bold;";
-        btnDownload.onclick = () => {
-            const ext = fmtSelect.value;
-            const text = resContent.innerText;
-            if (!text) return;
-            const blob = new Blob([text], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `ai-response-${Date.now()}.${ext}`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        };
-
-        const currentPlatform = PLATFORMS.find(p => window.location.hostname.includes(p.id));
-        if (currentPlatform) {
-            const btnPaste = document.createElement('button');
-            btnPaste.id = 'cc-btn-paste';
-            btnPaste.innerHTML = t.btn_paste;
-            btnPaste.style.cssText = "background:#ff9800; color:#fff; border:none; padding:5px 10px; border-radius:4px; font-size:12px; cursor:pointer; font-weight:bold; margin-left: 8px;";
-            btnPaste.onclick = () => {
-                const text = resContent.innerText;
-                const inputEl = document.querySelector(window.ccManager.config.inputSelector);
-                if (inputEl) {
-                    inputEl.focus();
-                    if (inputEl.contentEditable === "true") inputEl.textContent = text;
-                    else inputEl.value = text;
-                    inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-                    mask.remove();
-                } else {
-                    alert("Cannot find input box on this page.");
-                }
-            };
-            leftGroup.appendChild(btnPaste);
-        }
-
-        leftGroup.prepend(fmtSelect, btnDownload);
-        const rightGroup = document.createElement('div');
-        rightGroup.style.display = 'flex';
-        rightGroup.style.gap = '6px';
-        const transferTo = (url, text) => {
-            chrome.storage.local.set({
-                'cc_transfer_payload': {
-                    text: text,
-                    timestamp: Date.now(),
-                    source: 'AI Summary'
-                }
-            }, () => window.open(url, '_blank'));
-        };
+        exportGroup.append(btnExportSingle);
+        singleFooter.appendChild(exportGroup);
 
         const btnSendAll = document.createElement('button');
-        btnSendAll.id = 'cc-btn-sendall';
-        btnSendAll.innerHTML = t.btn_send_all;
-        Object.assign(btnSendAll.style, {
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            border: 'none', color: '#fff', padding: '6px 12px', borderRadius: '4px',
-            cursor: 'pointer', fontSize: '12px', fontWeight: 'bold', marginRight: '4px'
-        });
+        btnSendAll.id = 'btn-mm-send-all';
+        btnSendAll.innerHTML = t.mm_send_all;
+        btnSendAll.style.cssText = "background:linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:#fff; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-size:11px; font-weight:bold;";
         btnSendAll.onclick = () => {
-            const text = resContent.innerText;
-            PLATFORMS.forEach(p => transferTo(p.url, text));
+            const txt = state.singleViewConfig.responseText || state.singleViewConfig.context || "";
+            if (txt) {
+                chrome.storage.local.set({
+                    'cc_transfer_payload': {
+                        text: txt,
+                        timestamp: Date.now(),
+                        source: 'SingleView_SendAll'
+                    }
+                }, () => {
+                    PLATFORMS.forEach(p => window.open(p.url, '_blank'));
+                });
+            }
         };
-        rightGroup.appendChild(btnSendAll);
+        singleFooter.appendChild(btnSendAll);
+
         PLATFORMS.forEach(p => {
             const btn = document.createElement('button');
-            btn.innerHTML = p.icon;
-            btn.title = `Send to ${p.name}`;
-            Object.assign(btn.style, {
-                background: '#333', border: '1px solid #555', color: '#fff',
-                padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '14px'
-            });
-            btn.onmouseover = () => btn.style.background = '#444';
-            btn.onmouseout = () => btn.style.background = '#333';
-            btn.onclick = () => transferTo(p.url, resContent.innerText);
-            rightGroup.appendChild(btn);
+            btn.innerHTML = `${p.icon} ${p.name}`;
+            btn.style.cssText = "background:#333; border:1px solid #555; color:#fff; padding:5px 8px; border-radius:4px; cursor:pointer; font-size:11px;";
+            btn.onclick = () => {
+                const txt = state.singleViewConfig.responseText || state.singleViewConfig.context || "";
+                if (txt) chrome.storage.local.set({ 'cc_transfer_payload': { text: txt, timestamp: Date.now(), source: 'SingleView' } }, () => window.open(p.url, '_blank'));
+            };
+            singleFooter.appendChild(btn);
         });
 
-        footer.append(leftGroup, rightGroup);
-        card.append(header, tabs, resContainer, ctxContainer, footer);
-        mask.appendChild(card);
-        document.body.appendChild(mask);
+        const fabBasket = document.createElement('button');
+        fabBasket.innerHTML = "🧺";
+        fabBasket.title = t.mm_basket;
+        fabBasket.style.cssText = `
+            position: absolute; bottom: 20px; right: 20px; 
+            width: 48px; height: 48px; border-radius: 50%; 
+            background: #ff9800; border: 2px solid #fff; color: #fff; 
+            font-size: 24px; cursor: pointer; z-index: 1000; 
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            display: flex; align-items: center; justify-content: center;
+            transition: transform 0.2s, background 0.2s;
+        `;
 
-        window.ccManager.streamingModal = {
-            element: mask,
-            isMinimized: false,
-            restore: () => {
-                mask.style.display = 'flex';
-                card.style.width = '900px';
-                card.style.height = '80vh';
-                window.ccManager.streamingModal.isMinimized = false;
+        fabBasket.addEventListener('dragover', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            fabBasket.style.transform = 'scale(1.2)';
+            fabBasket.style.background = '#4CAF50';
+        });
+        fabBasket.addEventListener('dragleave', (e) => {
+            fabBasket.style.transform = 'scale(1)';
+            fabBasket.style.background = '#ff9800';
+        });
+        fabBasket.addEventListener('drop', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            fabBasket.style.transform = 'scale(1)';
+            fabBasket.style.background = '#ff9800';
+            const text = e.dataTransfer.getData('text/plain');
+            if (text) {
+                basketOp({
+                    kind: 'ADD',
+                    item: { text: text, timestamp: Date.now(), source: 'Drag Drop' }
+                }, () => {
+                    showToast(t.mm_basket_added);
+                    if (basketMiniWin.style.display !== 'none') refreshBasketList();
+                    fabBasket.innerHTML = "✅";
+                    setTimeout(() => fabBasket.innerHTML = "🧺", 1000);
+                });
+            }
+        });
+
+        const tmplSelect = header.querySelector('#template-select');
+        if (tmplSelect) {
+            tmplSelect.onchange = (e) => {
+                const key = e.target.value;
+                if (!key || !WORKFLOW_TEMPLATES[key]) return;
+                const isZh = state.lang === 'zh';
+                const title = isZh ? '載入模板?' : 'Load Template?';
+                const msg = isZh ? '目前的節點將被清空，確定載入?' : 'Current workflow will be cleared. Continue?';
+
+                showMainConfirmModal(title, msg, () => {
+                    const tmpl = WORKFLOW_TEMPLATES[key];
+                    state.multiPanelConfigs = [];
+                    state.workflowConnections = [];
+
+                    tmpl.nodes.forEach(n => {
+                        state.multiPanelConfigs.push({
+                            id: Date.now() + n.id,
+                            context: n.context,
+                            config: state.aiConfig || {},
+                            x: n.x, y: n.y,
+                            isStreaming: false, responseText: "", runCount: 0,
+                            customTitle: n.title
+                        });
+                    });
+
+                    const baseId = state.multiPanelConfigs[0].id - tmpl.nodes[0].id;
+                    if (tmpl.connections) {
+                        tmpl.connections.forEach(c => {
+                            state.workflowConnections.push({
+                                from: baseId + c.from,
+                                to: baseId + c.to,
+                                id: Date.now() + Math.random()
+                            });
+                        });
+                    }
+
+                    if (state.aiLayoutMode === 'single') {
+                        state.aiLayoutMode = 'canvas';
+                        updateCardStyle();
+                    }
+                    renderAll();
+                    tmplSelect.value = "";
+                });
+            };
+        }
+
+        const basketMiniWin = document.createElement('div');
+        basketMiniWin.id = 'cc-canvas-basket';
+        basketMiniWin.style.cssText = `
+            position: absolute; bottom: 80px; right: 20px; width: 280px; max-height: 400px;
+            background: #1e1e1e; border: 1px solid #444; border-radius: 8px;
+            display: none; flex-direction: column; z-index: 1001; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5); padding: 10px;
+        `;
+
+
+        const basketHeader = document.createElement('div');
+        basketHeader.style.cssText = "display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; border-bottom:1px solid #444; padding-bottom:5px; font-weight:bold; color:#ff9800;";
+        const basketTitle = document.createElement('span');
+        basketTitle.id = 'cc-mm-basket-title';
+        basketTitle.innerText = t.mm_basket;
+        const basketActions = document.createElement('div');
+        basketActions.style.display = 'flex'; basketActions.style.gap = '4px';
+
+        const btnBasketPasteAll = document.createElement('button');
+        btnBasketPasteAll.id = 'btn-mm-basket-paste-all';
+        btnBasketPasteAll.innerHTML = "📥";
+        btnBasketPasteAll.title = t.mm_basket_paste_all;
+        btnBasketPasteAll.style.cssText = "font-size:12px; background:transparent; border:1px solid #555; color:#ccc; cursor:pointer; padding:2px 4px; border-radius:3px;";
+        btnBasketPasteAll.onclick = () => {
+            getBasket(basket => {
+                if (!basket.length) return showToast(t.mm_basket_empty);
+                const content = basket.map(b => b.text).join('\n\n');
+                state.multiPanelConfigs.forEach(p => {
+                    p.context = (p.context ? p.context + "\n\n" : "") + content;
+                });
+                renderAll();
+                showToast(isZh ? "已貼至所有節點" : "Pasted to all nodes");
+            });
+        };
+
+        const btnBasketExport = document.createElement('button');
+        btnBasketExport.id = 'btn-mm-basket-export';
+        btnBasketExport.innerHTML = "⬇️";
+        btnBasketExport.title = t.mm_basket_export;
+        btnBasketExport.style.cssText = "font-size:12px; background:transparent; border:1px solid #555; color:#ccc; cursor:pointer; padding:2px 4px; border-radius:3px;";
+        btnBasketExport.onclick = () => {
+            getBasket(basket => {
+                if (!basket.length) return showToast(t.mm_basket_empty);
+                const content = basket.map(b => `[Source: ${b.source}]\n${b.text}`).join('\n\n====================\n\n');
+                const blob = new Blob([content], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = `basket-export-${Date.now()}.txt`;
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            });
+        };
+
+        const btnBasketImport = document.createElement('button');
+        btnBasketImport.id = 'btn-mm-basket-import';
+        btnBasketImport.innerHTML = "⬆️";
+        btnBasketImport.title = t.mm_basket_import;
+        btnBasketImport.style.cssText = "font-size:12px; background:transparent; border:1px solid #555; color:#ccc; cursor:pointer; padding:2px 4px; border-radius:3px;";
+        btnBasketImport.onclick = () => {
+            const input = document.createElement('input'); input.type = 'file'; input.accept = '.txt,.md,.json';
+            input.onchange = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    const text = ev.target.result;
+                    try {
+                        const json = JSON.parse(text);
+                        if (Array.isArray(json) && json.length && json[0] && typeof json[0] === 'object' && json[0].text) {
+                            const itemsToAdd = json.map(it => ({
+                                text: (it.text || '').toString(),
+                                timestamp: it.timestamp || Date.now(),
+                                source: it.source || (file.name + ' (Import)')
+                            })).filter(it => it.text.trim().length > 0);
+                            if (!itemsToAdd.length) throw new Error('Empty import');
+                            let pending = itemsToAdd.length;
+                            itemsToAdd.forEach((it) => {
+                                basketOp({ kind: 'ADD', item: it }, () => {
+                                    pending -= 1;
+                                    if (pending === 0) { showToast("Imported"); refreshBasketList(); }
+                                });
+                            });
+                        } else {
+                            throw new Error('Not array');
+                        }
+                    } catch (err) {
+                        basketOp({ kind: 'ADD', item: { text: text, timestamp: Date.now(), source: file.name + ' (Import)' } }, () => {
+                            showToast("Imported"); refreshBasketList();
+                        });
+                    }
+                };
+                reader.readAsText(file);
+            };
+            input.click();
+        };
+
+
+        basketActions.append(btnBasketPasteAll, btnBasketExport, btnBasketImport);
+        basketHeader.append(basketTitle, basketActions);
+
+        const basketList = document.createElement('div');
+        basketList.style.cssText = "flex:1; overflow-y:auto; max-height:300px;";
+
+        basketList.addEventListener('dragover', (e) => { e.preventDefault(); basketList.style.background = 'rgba(255,152,0,0.1)'; });
+        basketList.addEventListener('dragleave', (e) => { basketList.style.background = 'transparent'; });
+
+        basketList.addEventListener('drop', (e) => {
+            if (e.dataTransfer.types.includes('application/cc-basket-index')) {
+                e.preventDefault();
+                basketList.style.background = 'transparent';
+                return;
+            }
+
+            e.preventDefault(); basketList.style.background = 'transparent';
+            const text = e.dataTransfer.getData('text/plain');
+            if (text) {
+                basketOp({ kind: 'ADD', item: { text: text, timestamp: Date.now(), source: 'Canvas' } }, () => {
+                    showToast(t.mm_basket_added); refreshBasketList();
+                });
+            }
+        });
+
+        basketMiniWin.append(basketHeader, basketList);
+
+        const refreshBasketList = () => {
+            getBasket(items => {
+                basketList.innerHTML = "";
+                if (!items || items.length === 0) {
+                    basketList.innerHTML = `<div style='color:#666; font-size:11px; text-align:center;'>${t.mm_basket_empty}</div>`;
+                } else {
+                    items.forEach((item, index) => {
+                        const d = document.createElement('div');
+                        d.draggable = true;
+                        d.dataset.id = item.id;
+                        d.style.cssText = "background:#333; padding:6px; margin-bottom:5px; border-radius:4px; font-size:11px; cursor:grab; color:#ccc; border: 1px solid transparent; transition: all 0.2s;";
+                        d.innerText = item.text.substring(0, 40) + "...";
+
+                        d.ondragstart = (e) => {
+                            e.dataTransfer.setData('text/plain', item.text);
+                            e.dataTransfer.setData('application/cc-basket-id', item.id);
+                            e.dataTransfer.effectAllowed = 'move';
+                            d.style.opacity = '0.5';
+                        };
+
+                        d.ondragend = () => {
+                            d.style.opacity = '1';
+                            Array.from(basketList.children).forEach(c => {
+                                c.style.borderTop = 'none';
+                                c.style.borderBottom = 'none';
+                            });
+                        };
+
+                        d.ondragover = (e) => {
+                            if (e.dataTransfer.types.includes('application/cc-basket-id')) {
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = 'move';
+                                const rect = d.getBoundingClientRect();
+                                const midY = rect.top + rect.height / 2;
+                                if (e.clientY < midY) {
+                                    d.style.borderTop = '2px solid #4CAF50';
+                                    d.style.borderBottom = 'none';
+                                } else {
+                                    d.style.borderBottom = '2px solid #4CAF50';
+                                    d.style.borderTop = 'none';
+                                }
+                            }
+                        };
+
+                        d.ondragleave = () => {
+                            d.style.borderTop = 'none';
+                            d.style.borderBottom = 'none';
+                        };
+
+                        d.ondrop = (e) => {
+                            const fromId = e.dataTransfer.getData('application/cc-basket-id');
+                            if (fromId) {
+                                e.preventDefault(); e.stopPropagation();
+                                const toId = d.dataset.id;
+                                if (!toId || fromId === toId) return;
+
+                                const order = items.map(it => it.id).filter(Boolean);
+                                const fromIndex = order.indexOf(fromId);
+                                const toIndex = order.indexOf(toId);
+                                if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+
+                                const [moved] = order.splice(fromIndex, 1);
+                                order.splice(toIndex, 0, moved);
+
+                                basketOp({ kind: 'REORDER', order });
+                            }
+                        };
+
+                        basketList.appendChild(d);
+                    });
+                }
+            });
+        };
+
+        const canvasBasketListener = () => refreshBasketList();
+        state.basketListeners.add(canvasBasketListener);
+
+        fabBasket.onclick = () => {
+            if (basketMiniWin.style.display === 'none') {
+                basketMiniWin.style.display = 'flex'; refreshBasketList();
+            } else {
+                basketMiniWin.style.display = 'none';
             }
         };
 
-        let hasStarted = false;
-        return {
-            append: (text) => {
-                if (!hasStarted) { resContent.innerText = ''; hasStarted = true; }
-                resContent.innerText += text;
-                window.ccManager.lastAiText = resContent.innerText;
-                resContent.scrollTop = resContent.scrollHeight;
-            },
-            done: () => {
-                console.log("Stream finished");
-                footer.style.display = 'flex';
-                minTitle.innerText = "✅ AI Done";
-                window.ccManager.lastAiText = resContent.innerText;
-            },
-            error: (err) => {
-                const errDiv = document.createElement('div');
-                errDiv.style.cssText = "color:#ff5252; margin-top:10px; border-top:1px solid #444; padding-top:10px;";
-                errDiv.textContent = `❌ Error: ${err}`;
-                resContent.appendChild(errDiv);
+        canvasContainer.append(fabBasket, basketMiniWin);
+        cardEl.append(header, canvasContainer, singleFooter);
+        mask.appendChild(cardEl);
+        targetParent.appendChild(mask);
+        function detectCycle(nodes, connections) {
+            const ids = new Set(nodes.map(n => n.id));
+            const indeg = new Map();
+            const adj = new Map();
+            ids.forEach(id => { indeg.set(id, 0); adj.set(id, []); });
 
-                footer.style.display = 'flex';
-                window.ccManager.lastAiText = resContent.innerText;
+            connections.forEach(({ from, to }) => {
+                const f = parseInt(from), t = parseInt(to);
+                if (!ids.has(f) || !ids.has(t)) return;
+                adj.get(f).push(t);
+                indeg.set(t, indeg.get(t) + 1);
+            });
+
+            const q = [];
+            indeg.forEach((v, k) => { if (v === 0) q.push(k); });
+
+            let visited = 0;
+            while (q.length) {
+                const u = q.shift();
+                visited++;
+                for (const v of adj.get(u)) {
+                    indeg.set(v, indeg.get(v) - 1);
+                    if (indeg.get(v) === 0) q.push(v);
+                }
+            }
+            return visited !== ids.size;
+        }
+
+        function buildPrompt(node) {
+            const base = node.context || "";
+
+            if (!node.inputSlots) return base;
+
+            const nodeId = parseInt(node.id);
+
+            const incomingIds = state.workflowConnections
+                .filter(c => parseInt(c.to) === nodeId)
+                .map(c => parseInt(c.from));
+
+            if (incomingIds.length === 0) return base;
+
+            const blocks = incomingIds
+                .map(fromId => node.inputSlots[fromId])
+                .filter(slot => slot && slot.text)
+                .map(slot => `\n\n--- Input from Previous Node (ID:${String(slot.sourceId).slice(-3)}) ---\n${slot.text}`);
+
+            if (blocks.length > 0) {
+                return base + blocks.join("");
+            }
+
+            return base;
+        }
+
+        let isFlowStopped = false;
+
+        function runNodeTask(panel, expectedToken, forceRun = false) {
+            return new Promise((resolve) => {
+                if (expectedToken !== state.runToken) { resolve(); return; }
+                if (typeof isFlowStopped !== 'undefined' && isFlowStopped) { resolve(); return; }
+                if (panel.runCount >= state.loopSetting) { resolve(); return; }
+
+                const currentToken = expectedToken;
+
+                if (!panel.inputSlots) panel.inputSlots = {};
+                if (typeof panel._inputVersion === 'undefined') panel._inputVersion = 0;
+
+                if (panel.id !== 'single-node' && !forceRun) {
+                    const incomingConns = state.workflowConnections.filter(c => parseInt(c.to) === panel.id);
+                    const allParentsReady = incomingConns.every(c => {
+                        const pid = parseInt(c.from);
+                        const parent = state.multiPanelConfigs.find(p => p.id === pid);
+                        if (!parent) return false;
+                        return parent.lastFinishedRunToken === currentToken &&
+                            parent.runCount > panel.runCount &&
+                            parent.isFinished;
+                    });
+                    if (!allParentsReady && incomingConns.length > 0) { resolve(); return; }
+                }
+
+                const panelEl = (panel.id === 'single-node')
+                    ? document.getElementById('cc-canvas-container').querySelector('.cc-freestyle-panel')
+                    : document.getElementById(`panel-${panel.id}`);
+
+                const statusTag = panelEl ? panelEl.querySelector('.cc-status-tag') : null;
+                const outArea = panelEl ? panelEl.querySelector('.output-area') : null;
+
+                if (panelEl) { panelEl.classList.add('active'); panelEl.classList.remove('processing'); }
+                if (statusTag) {
+                    statusTag.innerText = `Running (${panel.runCount + 1}/${state.loopSetting})`;
+                    statusTag.style.color = "#00d2ff";
+                }
+
+                panel.responseText = "";
+                if (outArea) outArea.innerText = "";
+
+                const finalPrompt = (panel.id === 'single-node') ? (panel.context || "") : buildPrompt(panel);
+
+                const isLocalProvider = ['local', 'ollama', 'lm-studio', 'lm_studio'].includes(panel.config?.provider);
+
+                if (!panel.config || (!panel.config.apiKey && !isLocalProvider)) {
+                    if (statusTag) {
+                        statusTag.innerText = "Config Error";
+                        statusTag.style.color = "#ff0000";
+                    }
+                    panel.responseText = `[Error] Node configuration is missing or API Key is invalid.\nPlease check the settings specifically for Node #${String(panel.id).slice(-3)}.`;
+                    if (outArea) outArea.innerText = panel.responseText;
+                    resolve();
+                    return;
+                }
+
+                panel.isFinished = false;
+                panel.runCount++;
+
+                callAiStreaming(finalPrompt, panel.config, {
+                    append: (chunk) => {
+                        if ((typeof isFlowStopped !== 'undefined' && isFlowStopped) || state.runToken !== currentToken) return;
+                        panel.responseText += chunk;
+                        if (outArea) { outArea.innerText = panel.responseText; outArea.scrollTop = outArea.scrollHeight; }
+                        if (panel.id === 'single-node') state.lastAiText = panel.responseText;
+                    },
+                    done: () => {
+                        if ((typeof isFlowStopped !== 'undefined' && isFlowStopped) || state.runToken !== currentToken) { resolve(); return; }
+
+                        if (panelEl) { panelEl.classList.remove('active'); panelEl.classList.add('processing'); }
+                        if (statusTag) { statusTag.innerText = "Done"; statusTag.style.color = "#4CAF50"; }
+
+                        panel.isFinished = true;
+                        panel.lastFinishedRunToken = currentToken;
+
+                        if (panel.id !== 'single-node') triggerDownstream(panel.id, currentToken);
+                        resolve();
+                    },
+                    error: (err) => {
+                        if ((typeof isFlowStopped !== 'undefined' && isFlowStopped) || state.runToken !== currentToken) { resolve(); return; }
+                        if (statusTag) { statusTag.innerText = "Error"; statusTag.style.color = "#f00"; }
+                        panel.responseText += `\n[Error] ${err}`;
+                        if (outArea) outArea.innerText = panel.responseText;
+                        panel.isFinished = true;
+                        panel.hasError = true;
+                        failDownstream(panel.id, err, false);
+                        resolve();
+                    }
+                });
+            });
+        }
+
+        state.runNodeTask = runNodeTask;
+
+        function triggerDownstream(sourceId, tokenFromCaller) {
+            if (typeof isFlowStopped !== 'undefined' && isFlowStopped) return;
+
+            const currentToken = tokenFromCaller;
+            const sid = parseInt(sourceId);
+
+            const outgoing = state.workflowConnections.filter(c => parseInt(c.from) === sid);
+
+            const sourcePanel = state.multiPanelConfigs.find(p => p.id === sid);
+            if (!sourcePanel) return;
+
+            outgoing.forEach(conn => {
+                const tid = parseInt(conn.to);
+                const targetPanel = state.multiPanelConfigs.find(p => p.id === tid);
+                if (!targetPanel) return;
+
+                if (!targetPanel.inputSlots) targetPanel.inputSlots = {};
+
+                targetPanel.inputSlots[sid] = {
+                    text: sourcePanel.responseText || "",
+                    sourceId: sid,
+                    timestamp: Date.now()
+                };
+
+                targetPanel._inputVersion = (targetPanel._inputVersion || 0) + 1;
+
+                const queueKey = `${currentToken}:${targetPanel.runCount}:${targetPanel._inputVersion}`;
+                if (targetPanel._lastQueuedKey === queueKey) return;
+                if (targetPanel.runCount < state.loopSetting) {
+                    targetPanel._lastQueuedKey = queueKey;
+
+                    if (typeof AI_QUEUE !== 'undefined') {
+                        AI_QUEUE.add(() => state.runNodeTask(targetPanel, currentToken));
+                    } else {
+                        state.runNodeTask(targetPanel, currentToken);
+                    }
+                }
+            });
+        }
+
+        let isConnecting = false, connectStartNode = null, tempPath = null;
+        let isDraggingPanel = false, currentDragPanel = null, dragOffsetX = 0, dragOffsetY = 0;
+
+        function getCenterPos(el) {
+            if (!el) return { x: 0, y: 0 };
+            const r = el.getBoundingClientRect();
+            const c = canvasContainer.getBoundingClientRect();
+            return { x: r.left - c.left + r.width / 2, y: r.top - c.top + r.height / 2 };
+        }
+        function calculateBezier(x1, y1, x2, y2) {
+            const dist = Math.abs(x2 - x1) * 0.5 + 50;
+            return `M ${x1} ${y1} C ${x1 + dist} ${y1}, ${x2 - dist} ${y2}, ${x2} ${y2}`;
+        }
+        function renderConnections() {
+            const paths = svgLayer.querySelectorAll('path.connection');
+            paths.forEach(p => p.remove());
+            if (state.aiLayoutMode === 'single') return;
+
+            state.workflowConnections.forEach((conn, index) => {
+                const fromEl = document.querySelector(`.cc-connector.output[data-pid="${conn.from}"]`);
+                const toEl = document.querySelector(`.cc-connector.input[data-pid="${conn.to}"]`);
+                if (!fromEl || !toEl) return;
+                const p1 = getCenterPos(fromEl);
+                const p2 = getCenterPos(toEl);
+                const d = calculateBezier(p1.x, p1.y, p2.x, p2.y);
+                const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                path.setAttribute('d', d);
+                path.setAttribute('class', 'connection');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+                path.onclick = (e) => {
+                    e.stopPropagation();
+                    const isZh = state.lang === 'zh';
+                    const title = isZh ? '刪除連線?' : 'Delete Connection?';
+                    const msg = isZh ? '確定要移除這條連線嗎?' : 'Remove this link between nodes?';
+                    showMainConfirmModal(title, msg, () => {
+                        const fromId = parseInt(conn.from);
+                        const toId = parseInt(conn.to);
+
+                        state.workflowConnections.splice(index, 1);
+                        const targetNode = state.multiPanelConfigs.find(n => n.id === toId);
+                        if (targetNode && targetNode.inputSlots) {
+                            delete targetNode.inputSlots[fromId];
+                        }
+
+                        renderConnections();
+                    });
+                };
+                svgLayer.appendChild(path);
+            });
+        }
+
+        function createFreestylePanel(panel) {
+            const isSingleMode = state.aiLayoutMode === 'single';
+            const el = document.createElement('div');
+            el.className = 'cc-freestyle-panel';
+            el.id = (isSingleMode) ? 'panel-single' : `panel-${panel.id}`;
+
+            if (isSingleMode) {
+                el.classList.add('maximized');
+                Object.assign(el.style, {
+                    border: 'none', boxShadow: 'none', background: 'transparent',
+                    top: '0', left: '0', width: '100%', height: '100%', borderRadius: '0'
+                });
+            } else {
+                if (!panel.x) panel.x = 100 + (Math.random() * 50);
+                if (!panel.y) panel.y = 100 + (Math.random() * 50);
+                Object.assign(el.style, { left: `${panel.x}px`, top: `${panel.y}px` });
+            }
+
+            if (!isSingleMode) {
+                el.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); el.style.borderColor = '#00d2ff'; });
+                el.addEventListener('dragleave', (e) => { e.preventDefault(); e.stopPropagation(); el.style.borderColor = '#444'; });
+                el.addEventListener('drop', (e) => {
+                    e.preventDefault(); e.stopPropagation(); el.style.borderColor = '#444';
+                    const text = e.dataTransfer.getData('text/plain');
+                    if (text) {
+                        panel.context = text;
+                        updateTokenCount();
+                    }
+                });
+            }
+
+            el.ondblclick = (e) => {
+                if (isSingleMode) return;
+                e.stopPropagation();
+                el.classList.toggle('maximized');
+                setTimeout(renderConnections, 300);
+            };
+
+            const panelHeader = document.createElement('div');
+            panelHeader.className = 'cc-panel-header';
+            if (isSingleMode) panelHeader.style.display = 'none';
+
+            const titleSpan = document.createElement('span');
+            titleSpan.innerText = panel.customTitle ? panel.customTitle : `Node ${String(panel.id).slice(-3)}`;
+            const headerControls = document.createElement('div');
+            Object.assign(headerControls.style, { display: 'flex', alignItems: 'center', gap: '8px' });
+            const statusTag = document.createElement('span');
+            statusTag.className = 'cc-status-tag';
+            statusTag.innerText = 'Idle';
+            const closeBtn = document.createElement('button');
+            closeBtn.innerHTML = '✕';
+            closeBtn.style.cssText = "background:transparent; border:none; color:#ff5252; width:20px; cursor:pointer;";
+            closeBtn.onclick = (e) => {
+                e.stopPropagation();
+                state.multiPanelConfigs = state.multiPanelConfigs.filter(p => p.id !== panel.id);
+                state.workflowConnections = state.workflowConnections.filter(c => c.from !== panel.id && c.to !== panel.id);
+                renderAll();
+            };
+            headerControls.append(statusTag, closeBtn);
+            panelHeader.append(titleSpan, headerControls);
+
+            panelHeader.onmousedown = (e) => {
+                if (el.classList.contains('maximized') || isSingleMode) return;
+                e.preventDefault();
+                isDraggingPanel = true; currentDragPanel = { obj: panel, el: el };
+                const r = el.getBoundingClientRect();
+                dragOffsetX = e.clientX - r.left; dragOffsetY = e.clientY - r.top;
+                el.style.zIndex = 100;
+                window.addEventListener('mousemove', onPanelDrag);
+                window.addEventListener('mouseup', endPanelDrag);
+            };
+
+            const body = document.createElement('div');
+            body.className = 'cc-panel-body';
+
+            const controlBar = document.createElement('div');
+            controlBar.style.cssText = "display:flex; gap:6px; margin-bottom:10px; align-items:center; background:rgba(0,0,0,0.2); padding:4px; border-radius:4px;";
+
+            const configSelect = document.createElement('select');
+            configSelect.className = 'cc-node-select';
+            configSelect.style.cssText = "flex:1; min-width: 120px; background:#fff; color:#333; outline:none; border-radius:4px;";
+            const allConfigs = state.allAiConfigs || [];
+            allConfigs.forEach(cfg => {
+                const opt = document.createElement('option');
+                opt.value = cfg.name;
+                opt.innerText = `${cfg.name}`;
+                if (panel.config && panel.config.name === cfg.name) opt.selected = true;
+                configSelect.appendChild(opt);
+            });
+            configSelect.onchange = () => {
+                const sel = allConfigs.find(c => c.name === configSelect.value);
+                if (sel) panel.config = sel;
+            };
+
+            const btnStyle = "width:28px; height:28px; min-width:28px; border-radius:4px; cursor:pointer; font-size:14px; display:flex; align-items:center; justify-content:center; border:1px solid #555; background:#444; color:#fff;";
+
+            const btnEdit = document.createElement('button');
+            btnEdit.innerHTML = "✏️"; btnEdit.title = t.mm_node_edit; btnEdit.style.cssText = btnStyle;
+            btnEdit.onclick = (e) => {
+                e.stopPropagation();
+                let upstreamText = "";
+                if (panel.inputSlots) {
+                    const incomingIds = state.workflowConnections
+                        .filter(c => parseInt(c.to) === panel.id)
+                        .map(c => parseInt(c.from));
+
+                    upstreamText = incomingIds
+                        .map(pid => {
+                            const slot = panel.inputSlots[pid];
+                            return slot ? `[From Node ${String(pid).slice(-3)}]:\n${slot.text.substring(0, 300)}${slot.text.length > 300 ? '...' : ''}` : null;
+                        })
+                        .filter(t => t)
+                        .join("\n\n");
+                }
+                showEditorModal(t.mm_node_edit, panel.context, upstreamText, (newText) => {
+                    panel.context = newText;
+                    updateTokenCount();
+                });
+            };
+
+            const btnEraser = document.createElement('button');
+            btnEraser.innerHTML = "🧹"; btnEraser.title = t.mm_node_clear; btnEraser.style.cssText = btnStyle;
+            btnEraser.onclick = (e) => {
+                e.stopPropagation();
+                const isZh = state.lang === 'zh';
+                showMainConfirmModal(
+                    isZh ? "清空內容?" : "Clear Content?",
+                    isZh ? "確定清空此節點的輸入與回應?" : "Clear prompt and response?",
+                    () => {
+                        panel.context = "";
+                        panel.responseText = "";
+                        updateTokenCount();
+                        if (outArea) outArea.innerText = "";
+                    });
+            };
+
+            const btnCopy = document.createElement('button');
+            btnCopy.innerHTML = "📋"; btnCopy.title = t.mm_node_copy; btnCopy.style.cssText = btnStyle;
+            btnCopy.onclick = (e) => {
+                e.stopPropagation();
+                navigator.clipboard.writeText(panel.responseText || panel.context || "").then(() => {
+                    const o = btnCopy.innerHTML; btnCopy.innerHTML = "✅"; setTimeout(() => btnCopy.innerHTML = o, 1000);
+                });
+            };
+
+            const btnDrag = document.createElement('button');
+            if (!isSingleMode) {
+                btnDrag.innerHTML = "✋"; btnDrag.title = t.mm_node_drag;
+                btnDrag.draggable = true; btnDrag.style.cssText = btnStyle; btnDrag.style.cursor = "grab";
+                btnDrag.ondragstart = (e) => {
+                    e.stopPropagation();
+                    e.dataTransfer.setData('text/plain', panel.responseText || panel.context || "");
+                };
+            }
+
+            const btnRunNode = document.createElement('button');
+            btnRunNode.innerHTML = "▶"; btnRunNode.title = t.mm_node_run;
+            btnRunNode.style.cssText = "width:28px; height:28px; min-width:28px; background:#4CAF50; border:none; color:#fff; border-radius:4px; cursor:pointer; font-size:12px;";
+            btnRunNode.onclick = (e) => {
+                e.stopPropagation();
+                isFlowStopped = false;
+                state.runToken = (state.runToken || 0) + 1;
+                const thisToken = state.runToken;
+                panel.runCount = 0;
+                panel.isFinished = false;
+                runNodeTask(panel, thisToken, true).then(() => updateTokenCount());
+            };
+
+            const tokenDisplay = document.createElement('span');
+            tokenDisplay.style.cssText = "font-size:10px; color:#aaa; margin-left:auto; font-family:monospace;";
+
+            function updateTokenCount() {
+                const text = panel.responseText || panel.context || "";
+                const count = Math.ceil(text.length / 3.5);
+                const label = panel.responseText ? 'Res:' : 'Prm:';
+                tokenDisplay.innerText = `${label}${count}T`;
+            }
+            updateTokenCount();
+
+            controlBar.append(configSelect, btnEdit, btnEraser, btnCopy);
+            if (!isSingleMode) controlBar.append(btnDrag);
+            controlBar.append(btnRunNode, tokenDisplay);
+
+            const outArea = document.createElement('div');
+            outArea.className = 'output-area';
+            outArea.innerText = panel.responseText || "";
+            if (isSingleMode) {
+                outArea.style.background = 'transparent'; outArea.style.border = '1px solid #444';
+            }
+
+            body.append(controlBar, outArea);
+
+            if (!isSingleMode) {
+                const inputDot = document.createElement('div');
+                inputDot.className = 'cc-connector input';
+                inputDot.dataset.pid = panel.id; inputDot.dataset.type = 'input';
+                inputDot.onmousedown = (e) => startConnection(e, panel.id, 'input');
+
+                const outputDot = document.createElement('div');
+                outputDot.className = 'cc-connector output';
+                outputDot.dataset.pid = panel.id; outputDot.dataset.type = 'output';
+                outputDot.onmousedown = (e) => startConnection(e, panel.id, 'output');
+                el.append(inputDot, outputDot);
+            }
+
+            el.append(panelHeader, body);
+            return el;
+        }
+
+        function onPanelDrag(e) {
+            if (!isDraggingPanel || !currentDragPanel) return;
+            const r = canvasContainer.getBoundingClientRect();
+            let nx = e.clientX - r.left - dragOffsetX;
+            let ny = e.clientY - r.top - dragOffsetY;
+            if (ny < 0) ny = 0;
+            currentDragPanel.el.style.left = nx + 'px'; currentDragPanel.el.style.top = ny + 'px';
+            currentDragPanel.obj.x = nx; currentDragPanel.obj.y = ny;
+            renderConnections();
+        }
+        function endPanelDrag() {
+            isDraggingPanel = false; currentDragPanel = null;
+            window.removeEventListener('mousemove', onPanelDrag);
+            window.removeEventListener('mouseup', endPanelDrag);
+        }
+        function startConnection(e, pid, type) {
+            e.stopPropagation(); e.preventDefault();
+            isConnecting = true; connectStartNode = { el: e.target, pid, type };
+            tempPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            tempPath.setAttribute('class', 'temp-line'); svgLayer.appendChild(tempPath);
+            window.addEventListener('mousemove', onConnecting);
+            window.addEventListener('mouseup', endConnection);
+        }
+        function onConnecting(e) {
+            if (!isConnecting) return;
+            const p1 = getCenterPos(connectStartNode.el);
+            const r = canvasContainer.getBoundingClientRect();
+            const ex = e.clientX - r.left; const ey = e.clientY - r.top;
+            tempPath.setAttribute('d', calculateBezier(p1.x, p1.y, ex, ey));
+        }
+        function endConnection(e) {
+            if (!isConnecting) return;
+            isConnecting = false; if (tempPath) tempPath.remove();
+            const target = document.elementFromPoint(e.clientX, e.clientY);
+            if (target && target.classList.contains('cc-connector')) {
+                const tPid = parseInt(target.dataset.pid);
+                const tType = target.dataset.type;
+                if (tPid !== connectStartNode.pid && tType !== connectStartNode.type) {
+                    let fid = (connectStartNode.type === 'output') ? connectStartNode.pid : tPid;
+                    let tid = (connectStartNode.type === 'output') ? tPid : connectStartNode.pid;
+                    if (!state.workflowConnections.some(c => c.from === fid && c.to === tid)) {
+                        state.workflowConnections.push({ from: fid, to: tid, id: Date.now() });
+                        renderConnections();
+                    }
+                }
+            }
+            window.removeEventListener('mousemove', onConnecting);
+            window.removeEventListener('mouseup', endConnection);
+        }
+
+        function renderAll() {
+            Array.from(canvasContainer.children).forEach(c => {
+                if (c.id !== 'cc-connections-layer' && c !== fabBasket && c !== basketMiniWin) c.remove();
+            });
+
+            if (state.aiLayoutMode === 'single') {
+                canvasContainer.appendChild(createFreestylePanel(state.singleViewConfig));
+
+                canvasContainer.style.background = 'var(--cc-bg)';
+                canvasContainer.style.backgroundImage = 'none';
+                svgLayer.style.display = 'none';
+                singleFooter.style.display = 'flex';
+                fabBasket.style.display = 'none';
+                basketMiniWin.style.display = 'none';
+                header.querySelector('#loop-control-group').style.display = 'none';
+                header.querySelector('#canvas-controls').style.display = 'none';
+                const tmpl = header.querySelector('#toolbar-templates');
+                if (tmpl) tmpl.style.display = 'none';
+            } else {
+                state.multiPanelConfigs.forEach(p => {
+                    canvasContainer.appendChild(createFreestylePanel(p));
+                });
+                renderConnections();
+
+                canvasContainer.style.background = '#141414';
+                canvasContainer.style.backgroundImage = 'radial-gradient(#333 1px, transparent 1px)';
+                canvasContainer.style.backgroundSize = '24px 24px';
+                svgLayer.style.display = 'block';
+                singleFooter.style.display = 'none';
+                fabBasket.style.display = 'flex';
+                header.querySelector('#loop-control-group').style.display = 'flex';
+                header.querySelector('#canvas-controls').style.display = 'flex';
+                const tmpl = header.querySelector('#toolbar-templates');
+                if (tmpl) tmpl.style.display = 'flex';
+            }
+
+            const modalTitle = header.querySelector('#modal-title-text');
+            const toggleBtn = header.querySelector('#btn-toggle-view');
+
+            if (modalTitle) modalTitle.innerText = state.aiLayoutMode === 'single' ? t.mm_title_single : t.mm_title_multi;
+            if (toggleBtn) toggleBtn.innerText = state.aiLayoutMode === 'single' ? t.mm_view_multi : t.mm_view_single;
+        }
+
+        const switchToCanvas = () => {
+            state.aiLayoutMode = 'canvas';
+            chrome.storage.local.set({ 'cc_last_layout_mode': 'canvas' });
+            updateCardStyle();
+            renderAll();
+        };
+
+        header.querySelector('#btn-close-modal').onclick = () => {
+            state.basketListeners.delete(canvasBasketListener);
+            mask.remove();
+            state.streamingModal = null;
+            chrome.storage.local.set({ 'cc_last_layout_mode': state.aiLayoutMode });
+        };
+
+        const btnStop = header.querySelector('#btn-stop-all');
+        if (btnStop) btnStop.onclick = () => {
+            isFlowStopped = true;
+            if (typeof AI_QUEUE !== 'undefined') AI_QUEUE.queue = [];
+            btnStop.innerText = "🛑";
+        };
+
+        header.querySelector('#btn-toggle-view').onclick = () => {
+            if (state.aiLayoutMode === 'single') {
+                chrome.storage.local.get(['cc_has_shown_canvas_warning'], (res) => {
+                    if (res.cc_has_shown_canvas_warning) {
+                        switchToCanvas();
+                    } else {
+                        showResourceWarningModal(() => { switchToCanvas(); });
+                    }
+                });
+            } else {
+                state.aiLayoutMode = 'single';
+                chrome.storage.local.set({ 'cc_last_layout_mode': 'single' });
+                updateCardStyle();
+                renderAll();
             }
         };
+
+        header.querySelector('#btn-global-settings').onclick = () => {
+            openRobotSettings(null, () => renderAll());
+        };
+
+        const btnAdd = header.querySelector('#btn-add-node');
+        if (btnAdd) btnAdd.onclick = () => {
+            state.multiPanelConfigs.push({
+                id: Date.now(),
+                context: "",
+                config: state.aiConfig || {},
+                x: 150 + Math.random() * 50, y: 150 + Math.random() * 50,
+                isStreaming: false, responseText: "",
+                runCount: 0
+            });
+            renderAll();
+        };
+
+        const btnRun = header.querySelector('#btn-run-flow');
+        if (btnRun) btnRun.onclick = () => {
+            if (detectCycle(state.multiPanelConfigs, state.workflowConnections)) {
+                showToast(state.lang === 'zh'
+                    ? "⚠️ 偵測到循環連接 (Cycle)！請先移除循環再執行。"
+                    : "⚠️ Cycle detected! Please remove the loop before running.",
+                    document
+                );
+                return;
+            }
+
+            isFlowStopped = false;
+            state.runToken = (state.runToken || 0) + 1;
+            const thisToken = state.runToken;
+            if (state.aiLayoutMode === 'single') {
+                state.singleViewConfig.runCount = 0;
+                state.singleViewConfig.isFinished = false;
+
+                if (typeof AI_QUEUE !== 'undefined') {
+                    AI_QUEUE.add(() => runNodeTask(state.singleViewConfig, thisToken));
+                } else {
+                    runNodeTask(state.singleViewConfig, thisToken);
+                }
+                return;
+            }
+
+            state.multiPanelConfigs.forEach(p => {
+                p.runCount = 0;
+                p.isFinished = false;
+                p.lastFinishedRunToken = -1;
+                p._inputVersion = 0;
+                p._lastQueuedKey = "";
+            });
+
+            const dests = new Set(state.workflowConnections.map(c => parseInt(c.to)));
+            const roots = state.multiPanelConfigs.filter(p => !dests.has(p.id));
+
+            if (roots.length === 0 && state.multiPanelConfigs.length > 0) {
+                if (typeof AI_QUEUE !== 'undefined') AI_QUEUE.add(() => runNodeTask(state.multiPanelConfigs[0], thisToken));
+                else runNodeTask(state.multiPanelConfigs[0], thisToken);
+            } else {
+                const loopLimit = state.loopSetting || 1;
+
+                roots.forEach(p => {
+                    const hasOutgoing = state.workflowConnections.some(c => parseInt(c.from) === p.id);
+
+                    if (!hasOutgoing && loopLimit > 1) {
+                        for (let i = 0; i < loopLimit; i++) {
+                            if (typeof AI_QUEUE !== 'undefined') AI_QUEUE.add(() => runNodeTask(p, thisToken));
+                            else runNodeTask(p, thisToken);
+                        }
+                    } else {
+                        if (typeof AI_QUEUE !== 'undefined') AI_QUEUE.add(() => runNodeTask(p, thisToken));
+                        else runNodeTask(p, thisToken);
+                    }
+                });
+            }
+        };
+
+        renderAll();
+        state.streamingModal = { element: mask, restore: () => mask.style.display = 'flex' };
+        updateMultiNodeTexts();
+
+        if (autoStart) {
+            setTimeout(() => {
+                if (state.aiLayoutMode === 'single') {
+                    runNodeTask(state.singleViewConfig);
+                } else if (state.multiPanelConfigs.length > 0) {
+                    if (typeof AI_QUEUE !== 'undefined') AI_QUEUE.add(() => runNodeTask(state.multiPanelConfigs[0]));
+                }
+            }, 500);
+        }
     }
 
     setTimeout(() => {
@@ -4961,27 +6739,99 @@
         }
     }, 1000);
 
-    function showEditorModal(title, initialValue, onSaveCallback) {
+    function ensureHtmlDoc(raw) {
+        const html = (raw || "").trim();
+        if (!/<html[\s>]/i.test(html)) {
+            return `<!doctype html>
+    <html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    </head>
+    <body>
+    ${html}
+    </body>
+    </html>`;
+        }
+        return html;
+    }
+
+    function sanitizeHtmlForPreview(docHtml) {
+        let out = docHtml || "";
+
+        out = out.replace(/<script\b[^>]*\bsrc\s*=\s*(['"])[\s\S]*?\1[^>]*>[\s\S]*?<\/script>/gi, "");
+
+        out = out.replace(/<link\b[^>]*\brel\s*=\s*(['"])stylesheet\1[^>]*>/gi, (m) => {
+            return /href\s*=\s*/i.test(m) ? "" : m;
+        });
+
+        out = out.replace(/<(iframe|object|embed)\b[^>]*>/gi, "");
+
+        return out;
+    }
+
+    function showEditorModal(title, initialValue, upstreamContent, onSaveCallback) {
+        if (typeof upstreamContent === 'function' && !onSaveCallback) {
+            onSaveCallback = upstreamContent;
+            upstreamContent = null;
+        }
         const mask = document.createElement('div');
         mask.className = 'cc-modal-mask';
 
         const card = document.createElement('div');
         card.className = 'cc-modal-card';
-
         Object.assign(card.style, {
-            width: '800px',
-            maxWidth: '95vw',
-            height: '75vh',
-            display: 'flex',
-            flexDirection: 'column'
+            width: '900px', maxWidth: '95vw', height: '80vh',
+            display: 'flex', flexDirection: 'column'
         });
 
         const header = document.createElement('div');
         header.className = 'cc-modal-header';
-        const titleDiv = document.createElement('div');
-        titleDiv.style.fontWeight = 'bold';
-        titleDiv.textContent = `📝 ${title}`;
-        header.appendChild(titleDiv);
+
+        const titleGroup = document.createElement('div');
+        titleGroup.style.display = 'flex'; titleGroup.style.gap = '10px'; titleGroup.style.alignItems = 'center';
+        titleGroup.innerHTML = `<span style="font-weight:bold;">📝 ${title}</span>`;
+
+        const btnToggleBasket = document.createElement('button');
+        btnToggleBasket.innerHTML = "🧺 Basket";
+        btnToggleBasket.style.cssText = "background:#333; border:1px solid #555; color:#ccc; border-radius:4px; cursor:pointer; font-size:11px; padding:2px 8px;";
+        btnToggleBasket.onclick = () => {
+            const basketPanel = document.getElementById('editor-basket-panel');
+            if (basketPanel) {
+                basketPanel.style.display = basketPanel.style.display === 'none' ? 'flex' : 'none';
+            }
+        };
+
+        const btnPreview = document.createElement('button');
+        btnPreview.style.cssText = "background:#333; border:1px solid #555; color:#ccc; border-radius:4px; cursor:pointer; font-size:11px; padding:2px 8px; margin-left:8px; min-width:80px;";
+
+        let previewState = 0;
+
+        let upstreamPreview = null;
+        let textarea = null;
+        let previewDiv = null;
+        let htmlFrame = null;
+
+        const updatePreviewBtn = () => {
+            if (previewState === 0) {
+                btnPreview.innerHTML = "👁️ View HTML";
+                btnPreview.style.background = "#333";
+                btnPreview.style.color = "#ccc";
+            } else if (previewState === 1) {
+                btnPreview.innerHTML = "📄 View Markdown";
+                btnPreview.style.background = "#4CAF50";
+                btnPreview.style.color = "#fff";
+            } else {
+                btnPreview.innerHTML = "✏️ Edit";
+                btnPreview.style.background = "#2196F3";
+                btnPreview.style.color = "#fff";
+            }
+        };
+        updatePreviewBtn();
+
+        titleGroup.appendChild(btnToggleBasket);
+        titleGroup.appendChild(btnPreview);
+        header.appendChild(titleGroup);
 
         const btnClose = document.createElement('button');
         btnClose.innerHTML = '✕';
@@ -4989,115 +6839,2195 @@
         btnClose.onclick = () => mask.remove();
         header.appendChild(btnClose);
 
-        const textarea = document.createElement('textarea');
-        textarea.className = 'cc-modal-content';
+        if (upstreamContent) {
+            upstreamPreview = document.createElement('div');
+            Object.assign(upstreamPreview.style, {
+                padding: '8px 10px',
+                background: 'rgba(0,0,0,0.15)',
+                color: '#888',
+                borderBottom: '1px solid #333',
+                fontSize: '11px',
+                maxHeight: '80px',
+                overflowY: 'auto',
+                whiteSpace: 'pre-wrap',
+                fontFamily: 'monospace',
+                flexShrink: '0',
+                position: 'relative'
+            });
 
+            const closeUpstreamBtn = document.createElement('button');
+            closeUpstreamBtn.innerHTML = '✕';
+            closeUpstreamBtn.title = "Remove Upstream Preview";
+            Object.assign(closeUpstreamBtn.style, {
+                position: 'absolute', top: '4px', right: '6px',
+                background: 'transparent', border: 'none', color: '#666',
+                cursor: 'pointer', fontSize: '12px', fontWeight: 'bold', padding: '0'
+            });
+            closeUpstreamBtn.onmouseover = () => closeUpstreamBtn.style.color = '#ccc';
+            closeUpstreamBtn.onmouseout = () => closeUpstreamBtn.style.color = '#666';
+
+            closeUpstreamBtn.onclick = () => {
+                upstreamPreview.remove();
+                if (textarea) textarea.style.flex = '1';
+            };
+
+            const label = document.createElement('div');
+            label.style.marginBottom = '2px';
+            label.innerHTML = `<span style="color:#0088cc; font-weight:bold; font-size:10px;">🔌 Upstream Input (Preview)</span>`;
+
+            const textDiv = document.createElement('div');
+            textDiv.textContent = upstreamContent;
+            textDiv.style.opacity = '0.8';
+
+            upstreamPreview.append(closeUpstreamBtn, label, textDiv);
+        }
+
+        const contentContainer = document.createElement('div');
+        contentContainer.style.cssText = "flex:1; display:flex; overflow:hidden; position:relative; flex-direction:column;";
+
+        textarea = document.createElement('textarea');
+        textarea.className = 'cc-modal-content';
         Object.assign(textarea.style, {
-            background: '#252525',
-            border: 'none',
-            resize: 'none',
-            color: '#fff',
-            outline: 'none',
-            flex: '1',
-            padding: '16px',
-            fontSize: '14px',
-            lineHeight: '1.6',
-            fontFamily: 'monospace'
+            background: '#252525', border: 'none', resize: 'none', color: '#fff',
+            outline: 'none', flex: '1', padding: '16px', fontSize: '14px',
+            lineHeight: '1.6', fontFamily: 'monospace', display: 'block'
+        });
+        textarea.value = initialValue || "";
+        textarea.placeholder = "Enter prompt context here...";
+
+        textarea.addEventListener('dragover', (e) => { e.preventDefault(); textarea.style.background = '#333'; });
+        textarea.addEventListener('dragleave', (e) => { textarea.style.background = '#252525'; });
+        textarea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            textarea.style.background = '#252525';
+            const text = e.dataTransfer.getData('text/plain');
+            if (text) {
+                const start = textarea.selectionStart;
+                const end = textarea.selectionEnd;
+                const val = textarea.value;
+                textarea.value = val.substring(0, start) + text + val.substring(end);
+            }
         });
 
-        textarea.value = initialValue || "";
-        textarea.placeholder = "Enter content here...";
+        previewDiv = document.createElement('div');
+        previewDiv.className = 'cc-md-preview';
+        Object.assign(previewDiv.style, {
+            flex: '1', padding: '16px', overflowY: 'auto', display: 'none',
+            background: '#1e1e1e', color: '#e0e6ed', fontFamily: 'Segoe UI, sans-serif', lineHeight: '1.6', whiteSpace: 'pre-wrap'
+        });
+
+        htmlFrame = document.createElement('iframe');
+        htmlFrame.className = 'cc-html-preview';
+        Object.assign(htmlFrame.style, {
+            flex: '1', display: 'none', border: 'none', background: '#fff'
+        });
+        htmlFrame.setAttribute('sandbox', 'allow-scripts');
+
+        btnPreview.onclick = () => {
+            previewState = (previewState + 1) % 3;
+
+            textarea.style.display = 'none';
+            previewDiv.style.display = 'none';
+            htmlFrame.style.display = 'none';
+            if (upstreamPreview) upstreamPreview.style.display = 'none';
+
+            if (previewState === 0) {
+                htmlFrame.srcdoc = "";
+                textarea.style.display = 'block';
+                if (upstreamPreview && contentContainer.contains(upstreamPreview)) {
+                    upstreamPreview.style.display = 'block';
+                }
+                requestAnimationFrame(() => textarea.focus());
+
+            } else if (previewState === 1) {
+                htmlFrame.style.display = 'block';
+                const raw = textarea.value || "";
+                const docHtml = sanitizeHtmlForPreview(ensureHtmlDoc(raw));
+                setTimeout(() => { htmlFrame.srcdoc = docHtml; }, 0);
+
+            } else {
+                htmlFrame.srcdoc = "";
+                previewDiv.style.display = 'block';
+                previewDiv.innerHTML = simpleMarkdownParser(textarea.value || "");
+            }
+            updatePreviewBtn();
+        };
+
+        const basketPanel = document.createElement('div');
+        basketPanel.id = 'editor-basket-panel';
+        Object.assign(basketPanel.style, {
+            width: '250px', borderLeft: '1px solid #444', background: '#1e1e1e',
+            display: 'none', flexDirection: 'column', overflowY: 'auto', padding: '10px'
+        });
+
+        let selectedBasketIndices = new Set();
+        let lastClickedIndex = null;
+
+        const renderEditorBasket = () => {
+            getBasket((basket) => {
+                basketPanel.innerHTML = "";
+                if (!basket || basket.length === 0) {
+                    basketPanel.innerHTML = "<div style='color:#666; font-size:12px; text-align:center; padding:20px;'>Basket is empty</div>";
+                    return;
+                }
+                basket.forEach((item, index) => {
+                    const itemEl = document.createElement('div');
+                    itemEl.draggable = true;
+                    const isSelected = selectedBasketIndices.has(index);
+                    itemEl.style.cssText = `background: ${isSelected ? '#3b82f6' : '#333'}; border: 1px solid ${isSelected ? '#60a5fa' : '#444'}; padding: 8px; margin-bottom: 8px; border-radius: 4px; cursor: grab; font-size: 11px; color: ${isSelected ? '#fff' : '#eee'}; user-select: none; transition: all 0.1s;`;
+                    let safeSnip = escapeHTML(item.text.substring(0, 60).replace(/\n/g, ' '));
+                    if (item.text.length > 60) safeSnip += '...';
+                    itemEl.innerHTML = `<div style="color:${isSelected ? '#ddd' : '#aaa'}; font-size:9px; margin-bottom:4px;">${escapeHTML(item.source)}</div><div>${safeSnip}</div>`;
+
+                    itemEl.onclick = (e) => {
+                        e.stopPropagation();
+                        if (e.shiftKey && lastClickedIndex !== null) {
+                            const start = Math.min(lastClickedIndex, index);
+                            const end = Math.max(lastClickedIndex, index);
+                            selectedBasketIndices.clear();
+                            for (let i = start; i <= end; i++) selectedBasketIndices.add(i);
+                        } else if (e.ctrlKey || e.metaKey) {
+                            if (selectedBasketIndices.has(index)) selectedBasketIndices.delete(index); else selectedBasketIndices.add(index);
+                            lastClickedIndex = index;
+                        } else {
+                            selectedBasketIndices.clear(); selectedBasketIndices.add(index); lastClickedIndex = index;
+                        }
+                        renderEditorBasket();
+                    };
+                    itemEl.dataset.id = item.id;
+                    itemEl.ondragstart = (e) => {
+                        if (!selectedBasketIndices.has(index)) {
+                            selectedBasketIndices.clear();
+                            selectedBasketIndices.add(index);
+                            renderEditorBasket();
+                        }
+                        const indices = Array.from(selectedBasketIndices).sort((a, b) => a - b);
+                        const combinedText = indices.map(i => basket[i].text).join("\n\n");
+                        e.dataTransfer.setData('text/plain', combinedText);
+                        e.dataTransfer.setData('application/cc-editor-id', item.id);
+                        e.dataTransfer.effectAllowed = 'copyMove';
+
+                        itemEl.style.opacity = '0.5';
+                    };
+                    itemEl.ondragend = () => {
+                        itemEl.style.opacity = '1';
+                        Array.from(basketPanel.children).forEach(c => {
+                            c.style.borderTop = 'none';
+                            c.style.borderBottom = 'none';
+                        });
+                    };
+                    itemEl.ondragover = (e) => {
+                        if (e.dataTransfer.types.includes('application/cc-editor-id')) {
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = 'move';
+                            const rect = itemEl.getBoundingClientRect();
+                            if (e.clientY < rect.top + rect.height / 2) {
+                                itemEl.style.borderTop = '2px solid #4CAF50';
+                                itemEl.style.borderBottom = 'none';
+                            } else {
+                                itemEl.style.borderBottom = '2px solid #4CAF50';
+                                itemEl.style.borderTop = 'none';
+                            }
+                        }
+                    };
+
+                    itemEl.ondragleave = () => {
+                        itemEl.style.borderTop = 'none';
+                        itemEl.style.borderBottom = 'none';
+                    };
+                    itemEl.ondrop = (e) => {
+                        const fromId = e.dataTransfer.getData('application/cc-editor-id');
+                        if (!fromId) return;
+
+                        e.preventDefault();
+                        e.stopPropagation();
+
+                        const toId = itemEl.dataset.id;
+                        if (!toId || fromId === toId) return;
+
+                        const order = basket.map(it => it.id).filter(Boolean);
+                        const fromIndex = order.indexOf(fromId);
+                        const toIndex = order.indexOf(toId);
+                        if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+
+                        const [moved] = order.splice(fromIndex, 1);
+                        order.splice(toIndex, 0, moved);
+
+                        basketOp({ kind: 'REORDER', order }, () => {
+                            selectedBasketIndices.clear();
+                            renderEditorBasket();
+                            showToast("Reordered");
+                        });
+                    };
+                    basketPanel.appendChild(itemEl);
+                });
+            });
+        };
+
+        const editorBasketListener = () => renderEditorBasket();
+        state.basketListeners.add(editorBasketListener);
+        renderEditorBasket();
+
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = "flex:1; display:flex; overflow:hidden;";
+
+        if (upstreamPreview) contentContainer.appendChild(upstreamPreview);
+        contentContainer.append(textarea, previewDiv, htmlFrame);
+
+        wrapper.append(contentContainer, basketPanel);
 
         const footer = document.createElement('div');
         footer.className = 'cc-modal-footer';
-
         const btnCancel = document.createElement('button');
         btnCancel.innerText = "Cancel";
         btnCancel.style.cssText = "padding:6px 12px; background:transparent; border:1px solid #555; color:#ccc; border-radius:4px; cursor:pointer;";
-        btnCancel.onclick = () => mask.remove();
-
+        btnCancel.onclick = () => {
+            state.basketListeners.delete(editorBasketListener);
+            mask.remove();
+        };
         const btnSave = document.createElement('button');
         btnSave.innerText = "Save";
         btnSave.style.cssText = "padding:6px 16px; background:#4CAF50; border:none; color:#fff; border-radius:4px; cursor:pointer; font-weight:bold;";
         btnSave.onclick = () => {
             const val = textarea.value;
             if (onSaveCallback) onSaveCallback(val);
+            state.basketListeners.delete(editorBasketListener);
             mask.remove();
         };
-
         footer.append(btnCancel, btnSave);
-        card.append(header, textarea, footer);
+        card.append(header, wrapper, footer);
         mask.appendChild(card);
         document.body.appendChild(mask);
-
         setTimeout(() => textarea.focus(), 100);
     }
 
     async function callAiStreaming(text, config, controller) {
-        window.ccManager.lastAiContext = text;
-        window.ccManager.lastAiConfig = config;
-        const port = chrome.runtime.connect({ name: "cc-ai-stream" });
-        port.postMessage({ text, config });
+        state.lastAiContext = text;
+        state.lastAiConfig = config;
+        let port;
+        try {
+            port = chrome.runtime.connect({ name: "cc-ai-stream" });
+        } catch (e) {
+            console.error("Context-Carry: Connection failed", e);
+            controller.error("Extension context invalidated. Please refresh the page.");
+            return;
+        }
+        const currentLang = state.lang || 'en';
+        const keepAliveInterval = setInterval(() => {
+            try {
+                port.postMessage({ type: 'PING' });
+            } catch (e) {
+                clearInterval(keepAliveInterval);
+            }
+        }, 20000);
+        port.postMessage({ text, config, lang: currentLang });
         port.onMessage.addListener((msg) => {
             if (msg.type === 'TEXT') {
                 controller.append(msg.text);
             } else if (msg.type === 'DONE') {
+                clearInterval(keepAliveInterval);
                 controller.done();
                 port.disconnect();
             } else if (msg.type === 'ERROR') {
+                clearInterval(keepAliveInterval);
                 controller.error(msg.error);
                 port.disconnect();
             }
         });
 
         port.onDisconnect.addListener(() => {
+            clearInterval(keepAliveInterval);
             if (chrome.runtime.lastError) {
                 controller.error("Connection failed: " + chrome.runtime.lastError.message);
             }
         });
     }
 
+    function showResourceWarningModal(onConfirmCallback, targetDoc = document) {
+        const t = LANG_DATA[state.lang];
+        if (targetDoc.querySelector('.cc-resource-warning-overlay')) return;
+
+        const overlay = targetDoc.createElement('div');
+        overlay.className = 'cc-resource-warning-overlay';
+        Object.assign(overlay.style, {
+            position: 'fixed', top: '0', left: '0', width: '100%', height: '100%',
+            background: 'rgba(0, 0, 0, 0.9)', zIndex: '2147483660',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backdropFilter: 'blur(5px)', opacity: '0', transition: 'opacity 0.3s'
+        });
+
+        const card = targetDoc.createElement('div');
+        Object.assign(card.style, {
+            width: '360px', background: '#1e1e1e', border: '1px solid #444',
+            borderTop: '3px solid #ff9800', borderRadius: '8px', padding: '20px',
+            boxShadow: '0 10px 40px rgba(0,0,0,0.5)', color: '#fff',
+            fontFamily: 'sans-serif', display: 'flex', flexDirection: 'column', gap: '15px'
+        });
+
+        const warnTitle = t.warn_resource_title || '⚠️ Resource Warning';
+        const warnMsg = (t.warn_resource_msg1 || 'Activating Multi-Node View.') + '<br/>' + (t.warn_resource_msg2 || 'Multiple AI requests may consume tokens.');
+
+        card.innerHTML = `
+            <div style="font-size:16px; font-weight:bold; color:#ff9800; display:flex; align-items:center; gap:8px;">
+                <span>${warnTitle}</span>
+            </div>
+            <div style="font-size:13px; color:#ccc; line-height:1.5; background:rgba(255, 152, 0, 0.1); padding:10px; border-radius:4px;">
+                ${warnMsg}
+            </div>
+            <div style="font-size:11px; color:#888;">
+                * This warning will not appear again.
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:5px;">
+                <button id="btn-cancel-res-warn" style="background:transparent; border:1px solid #555; color:#aaa; padding:6px 12px; cursor:pointer; border-radius:4px; font-size:11px;">
+                    Cancel
+                </button>
+                <button id="btn-confirm-res-warn" style="background:#ff9800; border:none; color:#000; padding:6px 12px; cursor:pointer; border-radius:4px; font-weight:bold; font-size:11px;">
+                    I Understand
+                </button>
+            </div>
+        `;
+
+        overlay.appendChild(card);
+        targetDoc.body.appendChild(overlay);
+        requestAnimationFrame(() => overlay.style.opacity = '1');
+
+        card.querySelector('#btn-cancel-res-warn').onclick = () => {
+            overlay.style.opacity = '0';
+            setTimeout(() => {
+                overlay.remove();
+                if (targetDoc !== document) targetDoc.defaultView.close();
+            }, 300);
+        };
+
+        card.querySelector('#btn-confirm-res-warn').onclick = () => {
+            chrome.storage.local.set({ 'cc_has_shown_canvas_warning': true });
+            state.hasShownQuadWarning = true;
+
+            overlay.style.opacity = '0';
+            setTimeout(() => {
+                overlay.remove();
+                if (onConfirmCallback) onConfirmCallback();
+            }, 300);
+        };
+    }
+
     /* =========================================
        10. Global Drop Listener for LLMs
     ========================================= */
-    document.addEventListener('drop', (e) => {
-        if (!e.dataTransfer.types.includes('application/cc-sort')) return;
-        if (!window.ccManager.config || !window.ccManager.config.inputSelector) return;
-        let inputEl = e.target.closest(window.ccManager.config.inputSelector);
-        if (!inputEl && (e.target.tagName === 'DIV' || e.target.tagName === 'P')) {
-            inputEl = e.target.querySelector(window.ccManager.config.inputSelector);
-        }
-        if (!inputEl && window.location.hostname.includes('claude.ai')) {
-            inputEl = document.querySelector(window.ccManager.config.inputSelector);
-        }
-        if (inputEl) {
+    document.addEventListener('dragover', (e) => {
+        if (!state.config) return;
+
+        if (e.dataTransfer.types.includes('application/cc-sort')) return;
+
+        const isInput = e.target.closest(state.config.inputSelector) ||
+            e.target.isContentEditable ||
+            e.target.getAttribute('role') === 'textbox';
+
+        const isContainer = state.config.inputSelector && e.target.querySelector && e.target.querySelector(state.config.inputSelector);
+
+        if (isInput || isContainer) {
             e.preventDefault();
             e.stopPropagation();
-            const text = e.dataTransfer.getData('text/plain');
-            if (text) {
-                autoFillInput(inputEl, text);
-            }
-            if (window.location.hostname.includes('claude.ai')) {
-                console.log("Context-Carry: Cleaning up Claude overlay...");
-                const dragLeave = new DragEvent('dragleave', {
-                    bubbles: true,
-                    cancelable: true,
-                    view: window,
-                    clientX: e.clientX,
-                    clientY: e.clientY
-                });
-                document.body.dispatchEvent(dragLeave);
-                setTimeout(() => {
-                    const overlays = document.querySelectorAll('div');
-                    overlays.forEach(el => {
-                        if (el.innerText && el.innerText.includes('Drop files here')) {
-                            const container = el.closest('.fixed') || el.closest('.absolute') || el;
-                            if (container) container.remove();
-                        }
-                    });
-                }, 50);
-            }
+            e.dataTransfer.dropEffect = 'copy';
         }
     }, true);
 
+    document.addEventListener('drop', (e) => {
+        if (e.dataTransfer.types.includes('application/cc-sort') ||
+            e.dataTransfer.types.includes('application/cc-basket-index') ||
+            e.dataTransfer.types.includes('application/cc-editor-sort')) {
+            return;
+        }
+
+        if (!state.config) return;
+
+        let inputEl = null;
+        if (state.config.inputSelector) {
+            inputEl = e.target.closest(state.config.inputSelector);
+        }
+        if (!inputEl && state.config.inputSelector) {
+            if (e.target.tagName === 'DIV' || e.target.tagName === 'P' || e.target.tagName === 'MAIN') {
+                const targetInput = e.target.querySelector(state.config.inputSelector);
+                if (targetInput && targetInput.offsetParent !== null) {
+                    inputEl = targetInput;
+                }
+            }
+        }
+
+        if (!inputEl) {
+            if (e.target.isContentEditable ||
+                e.target.contentEditable === 'true' ||
+                e.target.getAttribute('role') === 'textbox') {
+
+                inputEl = e.target;
+
+            } else {
+                setTimeout(cleanUpSiteOverlays, 200);
+                return;
+            }
+        }
+
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            setTimeout(cleanUpSiteOverlays, 500);
+            return;
+        }
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        const text = e.dataTransfer.getData('text/plain');
+        if (text) {
+            autoFillInput(inputEl, text);
+            showToast(LANG_DATA[state.lang]?.toast_autofill || "Auto-filled by Context-Carry.");
+        }
+
+        cleanUpSiteOverlays();
+
+    }, true);
+
+    /* =========================================
+       11. Auto-Launch Check
+    ========================================= */
+    if (state.config) {
+        chrome.storage.local.get(['cc_disabled_domains'], (res) => {
+            const domains = res.cc_disabled_domains || [];
+            const host = window.location.hostname;
+
+            if (!domains.includes(host)) {
+                setTimeout(() => {
+                    createTransportDrone();
+                }, 500);
+            }
+        });
+    }
+
+    /* =========================================
+       12. Dedicated PiP UI (Neural Data Pod)
+    ========================================= */
+    async function openDedicatedPiP() {
+        if (!('documentPictureInPicture' in window)) return showToast("Browser doesn't support Document PiP");
+        if (state.isPiPActive) return;
+
+        loadAiConfig();
+
+        const pipWindow = await documentPictureInPicture.requestWindow({
+            width: 1000,
+            height: 800,
+        });
+
+        state.isPiPActive = true;
+        state.pipWindow = pipWindow;
+        const t = LANG_DATA[state.lang];
+
+        const style = document.createElement('style');
+        style.textContent = `
+            :root { 
+                --bg: #0a0a0c; 
+                --panel: #141416; 
+                --card-bg: #1a1b1e;
+                --border: #333; 
+                --input-bg: #111;
+                --hover-bg: rgba(255,255,255,0.1);
+                --accent: #00d2ff; 
+                --accent-glow: rgba(0, 210, 255, 0.2);
+                --text: #e0e0e0; 
+                --text-dim: #888; 
+                --text-inv: #000;
+                --success: #4CAF50; 
+                --mech-border: #444; 
+                --shadow: 0 10px 30px rgba(0,0,0,0.5);
+                --tag-bg: #222;
+            }
+
+            body[data-theme="light"] {
+                --bg: #f0f2f5; 
+                --panel: #ffffff; 
+                --card-bg: #ffffff;
+                --border: #e0e0e0; 
+                --input-bg: #f8fafc;
+                --hover-bg: rgba(0,0,0,0.05);
+                --accent: #007acc; 
+                --accent-glow: rgba(0, 122, 204, 0.15);
+                --text: #334155; 
+                --text-dim: #64748b; 
+                --text-inv: #fff;
+                --success: #16a34a; 
+                --mech-border: #cbd5e1; 
+                --shadow: 0 4px 15px rgba(0,0,0,0.1);
+                --tag-bg: #e2e8f0;
+            }
+
+            body { 
+                margin: 0; background: var(--bg); color: var(--text); 
+                font-family: 'Segoe UI', system-ui, sans-serif; 
+                display: flex; flex-direction: column; height: 100vh; overflow: hidden; 
+                user-select: none; transition: background 0.3s, color 0.3s;
+            }
+            
+            .mech-config-overlay {
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(4px);
+                z-index: 2147483660; display: flex; align-items: center; justify-content: center;
+                opacity: 0; animation: fadeIn 0.3s forwards;
+            }
+            .mech-config-card {
+                width: 90%; max-width: 400px;
+                background: var(--card-bg); border: 2px solid var(--mech-border);
+                border-top: 4px solid var(--accent);
+                box-shadow: var(--shadow);
+                color: var(--text); font-family: 'Segoe UI', monospace;
+                padding: 20px; box-sizing: border-box;
+                transform: scale(0.9); animation: mechPopOpen 0.3s forwards;
+            }
+            @keyframes fadeIn { to { opacity: 1; } }
+            @keyframes mechPopOpen { to { transform: scale(1); } }
+
+            .mech-config-header {
+                font-size: 16px; font-weight: bold; color: var(--accent);
+                text-transform: uppercase; letter-spacing: 2px;
+                border-bottom: 1px dashed var(--mech-border);
+                padding-bottom: 10px; margin-bottom: 20px;
+            }
+            .mech-field { margin-bottom: 15px; }
+            .mech-label {
+                display: block; font-size: 10px; color: var(--text-dim);
+                margin-bottom: 5px; letter-spacing: 1px;
+            }
+            .mech-input, .mech-select {
+                width: 100%; background: var(--input-bg); border: 1px solid var(--mech-border); 
+                color: var(--text); padding: 8px 10px; font-family: monospace; font-size: 12px;
+                box-sizing: border-box; height: 36px;
+            }
+            .mech-input:focus, .mech-select:focus {
+                border-color: var(--accent); outline: none;
+            }
+            .mech-btn-group { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+            .mech-action-btn {
+                background: transparent; border: 1px solid var(--accent); color: var(--accent);
+                padding: 8px 16px; cursor: pointer; font-family: monospace; font-weight: bold;
+            }
+            .mech-action-btn:hover { background: var(--accent); color: var(--text-inv); }
+            .mech-cancel-btn {
+                background: transparent; border: 1px solid var(--mech-border); color: var(--text-dim);
+                padding: 8px 16px; cursor: pointer; font-family: monospace;
+            }
+            .mech-cancel-btn:hover { border-color: var(--text); color: var(--text); }
+
+            .pip-header { 
+                padding: 0; background: var(--panel); border-bottom: 1px solid var(--border); 
+                display: flex; justify-content: space-between; align-items: center;
+                height: 40px; -webkit-app-region: drag; 
+            }
+            .pip-tabs-group {
+                display: flex; flex: 1; height: 100%;
+            }
+            .pip-tab { 
+                flex: 1; display: flex; align-items: center; justify-content: center;
+                padding: 0 20px; cursor: pointer; font-size: 11px; font-weight: bold; letter-spacing: 1px; 
+                color: var(--text-dim); transition: 0.2s; border-bottom: 2px solid transparent; 
+                max-width: 150px;
+            }
+            .pip-tab:hover { background: var(--hover-bg); color: var(--text); }
+            .pip-tab.active { color: var(--accent); border-bottom-color: var(--accent); background: linear-gradient(to top, var(--accent-glow), transparent); }
+            
+            .pip-controls-group {
+                display: flex; height: 100%; align-items: center; padding-right: 5px; -webkit-app-region: no-drag;
+            }
+            .pip-ctrl-btn {
+                width: 36px; height: 100%; display: flex; align-items: center; justify-content: center;
+                cursor: pointer; color: var(--text-dim); transition: 0.2s; font-size: 14px;
+                background: transparent; border: none;
+            }
+            .pip-ctrl-btn:hover { background: var(--hover-bg); color: var(--text); }
+            
+            .tag-bar { 
+                padding: 8px; border-bottom: 1px solid var(--border); display: flex; gap: 6px; 
+                overflow-x: auto; white-space: nowrap; background: var(--input-bg); align-items: center;
+                min-height: 28px;
+            }
+            .tag-pill { 
+                font-size: 10px; padding: 3px 10px; border-radius: 12px; border: 1px solid var(--mech-border); 
+                cursor: grab; color: var(--text-dim); transition: 0.2s; user-select: none; background: var(--tag-bg);
+            }
+            .tag-pill:hover { border-color: var(--accent); color: var(--text); }
+            .tag-pill.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: bold; }
+            .tag-add-btn {
+                font-size: 14px; width: 24px; height: 24px; border-radius: 50%; border: 1px dashed var(--text-dim);
+                color: var(--text-dim); display: flex; align-items: center; justify-content: center; cursor: pointer;
+            }
+            .tag-add-btn:hover { border-color: var(--accent); color: var(--accent); }
+            .tag-input-field {
+                background: var(--bg); border: 1px solid var(--accent); color: var(--text); 
+                font-size: 10px; padding: 2px 6px; border-radius: 4px; outline: none; width: 80px;
+            }
+
+            .list-container { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+            .pip-item { 
+                background: var(--card-bg); border: 1px solid var(--border); padding: 8px 10px; 
+                border-radius: 4px; font-size: 11px; cursor: grab; 
+                border-left: 3px solid var(--mech-border); transition: all 0.2s; position: relative; 
+                display: flex; flex-direction: column; gap: 4px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            }
+            .pip-item:hover { border-color: var(--text-dim); transform: translateY(-1px); }
+            .pip-item.tag-hover { border-color: var(--accent); background: var(--accent-glow); transform: scale(1.02); }
+
+            .pip-item-meta { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 9px; }
+            .pip-item-content { color: var(--text); white-space: pre-wrap; overflow: hidden; max-height: 60px; line-height: 1.4; }
+            .pip-native-select {
+                background: var(--input-bg);
+                color: var(--text);
+                border: 1px solid var(--border);
+                font-size: 10px;
+                height: 24px;
+                border-radius: 4px;
+                outline: none;
+                cursor: pointer;
+            }
+            .pip-native-select option {
+                background: var(--card-bg);
+                color: var(--text);
+            }
+            
+            .item-tags { 
+                display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; 
+                min-height: 16px;
+                align-items: center;
+            }
+            .mini-tag { 
+                font-size: 9px; padding: 1px 6px; background: var(--accent-glow); 
+                border: 1px solid rgba(0,210,255,0.3); border-radius: 8px; color: var(--accent); 
+                display: inline-block;
+            }
+
+            .btn-item-action { position: absolute; right: 5px; top: 10px; display:none; gap:4px; }
+            .pip-item:hover .btn-item-action { display:flex; }
+            .act-btn { background: var(--tag-bg); border: 1px solid var(--mech-border); color: var(--text-dim); cursor: pointer; border-radius: 3px; font-size: 10px; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; }
+            .act-btn:hover { background: var(--hover-bg); color: var(--text); }
+            .act-btn.del:hover { background: #fee2e2; border-color: #ef4444; color: #ef4444; }
+            body[data-theme="dark"] .act-btn.del:hover { background: #500; border-color: #f00; color: #fff; }
+
+            .pip-footer { padding: 8px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: space-around; background: var(--panel); }
+            .pip-tool-btn {
+                flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+                background: var(--input-bg); border: 1px solid var(--border); color: var(--text-dim); padding: 8px;
+                border-radius: 6px; cursor: pointer; font-size: 11px; transition: 0.2s;
+            }
+            .pip-tool-btn:hover { background: var(--hover-bg); color: var(--text); border-color: var(--mech-border); }
+            .pip-tool-btn i { font-style: normal; font-size: 14px; }
+
+            .mini-basket { 
+                height: 36px; border-top: 1px solid var(--border); background: var(--panel); 
+                transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1); display: flex; flex-direction: column; overflow: hidden; 
+                position: absolute; bottom: 0; width: 100%; z-index: 100;
+            }
+            .mini-basket.open { height: 320px; box-shadow: 0 -5px 20px rgba(0,0,0,0.2); }
+            .mb-header { padding: 0 10px; height: 36px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; background: var(--hover-bg); border-bottom: 1px solid var(--border); color: var(--text); }
+            .mb-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 4px; background: var(--bg); }
+            .mb-item { font-size: 10px; padding: 6px; background: var(--card-bg); border-radius: 3px; color: var(--text); cursor: grab; border: 1px solid transparent; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+            .mb-item:hover { border-color: var(--mech-border); background: var(--hover-bg); }
+
+            .drop-zone-overlay { position: absolute; top:0; left:0; width:100%; height:100%; background: var(--accent-glow); border: 2px dashed var(--accent); display: flex; align-items: center; justify-content: center; flex-direction: column; color: var(--accent); font-weight: bold; pointer-events: none; opacity: 0; z-index: 100; backdrop-filter: blur(2px); transition: opacity 0.2s; }
+            body.drag-active .drop-zone-overlay { opacity: 1; }
+            .pip-view { flex: 1; display: none; flex-direction: column; position: relative; overflow: hidden; }
+            .pip-view.active { display: flex; }
+            #pip-canvas { flex: 1; position: relative; overflow: hidden; background-image: radial-gradient(var(--text-dim) 1px, transparent 1px); background-size: 20px 20px; cursor: grab; opacity: 0.8; }
+            #pip-canvas:active { cursor: grabbing; }
+            
+            .pip-node { 
+                position: absolute; width: 280px; background: var(--card-bg); 
+                border: 1px solid var(--border); border-radius: 8px; 
+                box-shadow: var(--shadow); display: flex; flex-direction: column; 
+                transition: box-shadow 0.2s, border-color 0.2s; z-index: 10; 
+                overflow: visible !important; 
+            }
+            .pip-node:hover { border-color: var(--text-dim); z-index: 20; }
+            .pip-node.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+            .pip-node.drag-target { border-color: var(--accent) !important; background: var(--accent-glow); }
+            .node-header { padding: 8px 10px; background: var(--hover-bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; cursor: grab; border-radius: 8px 8px 0 0; }
+            .node-title { font-size: 11px; font-weight: bold; color: var(--text); }
+            .node-status { font-size: 9px; padding: 2px 6px; border-radius: 4px; background: var(--input-bg); color: var(--text-dim); }
+            .node-status.busy { color: #ff9800; background: rgba(255,152,0,0.1); }
+            .node-status.ok { color: var(--success); background: rgba(76,175,80,0.1); }
+            .node-body { padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--card-bg); border-radius: 0 0 8px 8px; }
+            .node-controls { display: flex; gap: 4px; align-items: center; }
+            .node-select { flex: 1; background: var(--input-bg); color: var(--text); border: 1px solid var(--mech-border); font-size: 10px; height: 24px; border-radius: 4px; outline:none; }
+            .node-icon-btn { width: 24px; height: 24px; background: var(--input-bg); border: 1px solid var(--mech-border); color: var(--text); border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+            .node-icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+            .node-icon-btn.run { background: var(--success); border-color: var(--success); color: #fff; }
+            .node-output { height: 100px; background: var(--input-bg); border: 1px solid var(--mech-border); border-radius: 4px; padding: 8px; font-size: 11px; color: var(--text); overflow-y: auto; white-space: pre-wrap; font-family: monospace; resize: vertical; min-height: 60px; outline:none; }
+            .connector { 
+                position: absolute; width: 14px; height: 14px; 
+                background: var(--border); border: 2px solid var(--text-dim); 
+                border-radius: 50%; top: 12px; cursor: crosshair; 
+                transition: transform 0.2s; z-index: 10;
+            }
+            .connector:hover { transform: scale(1.3); border-color: var(--accent); background: var(--accent); }
+            .connector.conn-in { left: -9px; background: var(--bg); } 
+            .connector.conn-out { right: -9px; background: var(--bg); }
+            
+            ::-webkit-scrollbar { width: 4px; }
+            ::-webkit-scrollbar-track { background: transparent; }
+            ::-webkit-scrollbar-thumb { background: var(--mech-border); border-radius: 2px; }
+            ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+        `;
+        pipWindow.document.head.appendChild(style);
+
+        if (state.theme === 'light') {
+            pipWindow.document.body.setAttribute('data-theme', 'light');
+        } else {
+            pipWindow.document.body.removeAttribute('data-theme');
+        }
+
+        const doc = pipWindow.document;
+
+        doc.body.innerHTML = `
+            <div class="drop-zone-overlay">
+                <div style="font-size: 32px;">📥</div>
+                <div>${t.pip_drop_title}</div>
+                <div style="font-size: 10px; opacity: 0.8; margin-top:5px;">${t.pip_drop_sub}</div>
+            </div>
+
+            <div class="pip-header">
+                <div class="pip-tabs-group">
+                    <div id="tab-collect" class="pip-tab active">${t.pip_tab_collect}</div>
+                    <div id="tab-flow" class="pip-tab">${t.pip_tab_flow}</div>
+                </div>
+                <div class="pip-controls-group">
+                    <select id="pip-template-select" style="background:#111; color:#aaa; border:1px solid #333; font-size:10px; margin-right:10px; height:24px; border-radius:4px;">
+                        <option value="">🧩 Load Template</option>
+                        ${Object.keys(WORKFLOW_TEMPLATES).map(k => `<option value="${k}">${WORKFLOW_TEMPLATES[k].name}</option>`).join('')}
+                    </select>
+                    
+                    <div style="display:flex; align-items:center; gap:4px; margin-right:10px; padding:2px 6px; border-radius:4px; border:1px solid var(--border); height:24px; box-sizing:border-box;">
+                        <span style="font-size:10px; color:var(--text-dim);">Loop:</span>
+                        <select id="pip-loop-select" class="pip-native-select" style="border:none; height:20px; background:transparent;">
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="5">3</option>
+                            <option value="10">5</option>
+                        </select>
+                    </div>
+
+                    <button id="btn-pip-theme" class="pip-ctrl-btn" title="${t.pip_tooltip_theme}">🌗</button>
+                    <button id="btn-pip-settings" class="pip-ctrl-btn" title="${t.pip_tooltip_settings}">⚙️</button>
+                    <button id="btn-pip-max" class="pip-ctrl-btn" title="${t.pip_tooltip_max}">⬜</button>
+                </div>
+            </div>
+            
+            <div id="view-collect" class="pip-view active">
+               <div id="collect-tag-bar" class="tag-bar"></div>
+                <div id="pip-list" class="list-container"></div>
+                <div class="pip-footer">
+                    <button id="btn-pip-paste" class="pip-tool-btn" title="${t.pip_btn_paste}"><i>📋</i> ${t.pip_btn_paste}</button>
+                    <button id="btn-pip-export" class="pip-tool-btn" title="${t.pip_btn_export}"><i>📤</i> ${t.pip_btn_export}</button>
+                    <button id="btn-pip-clear" class="pip-tool-btn" title="${t.pip_btn_clear}" style="color:#ff5252;"><i>🗑️</i> ${t.pip_btn_clear}</button>
+                </div>
+            </div>
+            
+            <div id="view-flow" class="pip-view">
+                <div id="pip-canvas">
+                    <svg id="svg-layer" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; overflow:visible;">
+                        <defs><marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#888" /></marker></defs>
+                    </svg>
+                </div>
+                
+                <div style="position:absolute; top:10px; left:10px; display:flex; gap:5px; z-index:90;">
+                    <button id="btn-add-node" style="width:28px; height:28px; background:var(--card-bg); border:1px solid var(--border); color:var(--text); border-radius:4px; cursor:pointer; font-weight:bold;" title="Add Node">+</button>
+                    <button id="btn-run-all" style="width:28px; height:28px; background:var(--accent); border:none; color:#fff; border-radius:4px; cursor:pointer; font-weight:bold;" title="Run All">▶</button>
+                    <button id="btn-stop-pip" style="width:28px; height:28px; background:#ff5252; border:none; color:#fff; border-radius:4px; cursor:pointer; font-weight:bold;" title="Stop">⏹</button>
+                </div>
+
+                <div id="mini-basket" class="mini-basket">
+                    <div class="mb-header" id="mb-toggle">
+                        <div class="mb-title"><span>${t.pip_basket_title}</span> (<span id="mb-count">0</span>)</div>
+                        <span style="font-size:10px; opacity:0.7;">▲</span>
+                    </div>
+                    <div id="flow-tag-bar" class="tag-bar" style="border-bottom:none; border-top:1px solid var(--border); background:var(--panel);"></div>
+                    <div id="mb-list" class="mb-list"></div>
+                </div>
+            </div>
+        `;
+
+        initPiPLogic(pipWindow);
+
+        setTimeout(() => {
+            checkPiPGuards(pipWindow);
+        }, 300);
+
+        pipWindow.addEventListener("pagehide", () => {
+            state.isPiPActive = false;
+            state.pipWindow = null;
+            const panel = document.getElementById('cc-robot-panel');
+            if (panel) panel.classList.remove('cc-hidden');
+            const stdPanel = document.getElementById('cc-panel');
+            if (stdPanel) stdPanel.classList.remove('cc-hidden');
+        });
+
+        const panel = document.getElementById('cc-robot-panel');
+        if (panel) panel.classList.add('cc-hidden');
+        const stdPanel = document.getElementById('cc-panel');
+        if (stdPanel) stdPanel.classList.add('cc-hidden');
+    }
+
+    function checkPiPGuards(win) {
+        const doc = win.document;
+        chrome.storage.local.get(['cc_feature_unlock', 'cc_has_shown_canvas_warning'], (res) => {
+            if (!res.cc_feature_unlock) {
+                const t = LANG_DATA[state.lang];
+                const combinedWarning = t.unlock_warning +
+                    `<br/><br/><div style="border-top:1px dashed #555; margin-top:10px; padding-top:10px;">
+                        <b style='color:#ff9800'>⚡ Multi-Node Workflow Warning:</b><br/>
+                        This interface enables advanced multi-step workflows. Running multiple nodes simultaneously will consume tokens faster. Please ensure you monitor your usage.
+                    </div>`;
+
+                showFeatureUnlockModal(doc, combinedWarning, () => {
+                    chrome.storage.local.set({ 'cc_has_shown_canvas_warning': true }, () => {
+                        checkPiPGuards(win);
+                    });
+                });
+            } else if (!res.cc_has_shown_canvas_warning) {
+                showResourceWarningModal(() => {
+                }, doc);
+            }
+        });
+    }
+
+    function showUniversalExportModal(win, contentData, defaultFilename = 'export') {
+        const doc = win.document;
+        const t = LANG_DATA[state.lang];
+
+        const existing = doc.querySelector('.mech-config-overlay');
+        if (existing) existing.remove();
+
+        const overlay = doc.createElement('div');
+        overlay.className = 'mech-config-overlay';
+        overlay.style.opacity = '1';
+
+        const card = doc.createElement('div');
+        card.className = 'mech-config-card';
+        card.style.width = '350px';
+
+        card.innerHTML = `
+            <div class="mech-config-header">
+                <span>${t.pip_export_title || 'EXPORT / SAVE'}</span>
+            </div>
+            
+            <div class="mech-field">
+                <span class="mech-label">${t.pip_label_filename || 'FILE NAME'}</span>
+                <input type="text" id="exp-name" class="mech-input" value="${escapeHTML(defaultFilename)}" placeholder="Enter filename">
+            </div>
+
+            <div class="mech-field">
+                <span class="mech-label">${t.pip_label_format || 'FORMAT'}</span>
+                <select id="exp-format" class="mech-select">
+                    <option value="txt">Text File (.txt)</option>
+                    <option value="md">Markdown (.md)</option>
+                    <option value="pdf">PDF (Print View)</option>
+                </select>
+            </div>
+
+            <div class="mech-btn-group">
+                <button id="btn-cancel" class="mech-cancel-btn">${t.pip_modal_cancel || 'Cancel'}</button>
+                <button id="btn-save" class="mech-action-btn">${t.pip_btn_save_export || 'Export'}</button>
+            </div>
+        `;
+
+        const btnCancel = card.querySelector('#btn-cancel');
+        const btnSave = card.querySelector('#btn-save');
+        const inputName = card.querySelector('#exp-name');
+        const selectFormat = card.querySelector('#exp-format');
+
+        btnCancel.onclick = () => overlay.remove();
+
+        btnSave.onclick = () => {
+            const name = inputName.value.trim() || 'export';
+            const format = selectFormat.value;
+            const isBasketArray = Array.isArray(contentData);
+
+            if (format === 'pdf') {
+                overlay.remove();
+                const printFrame = win.document.createElement('iframe');
+                Object.assign(printFrame.style, { position: 'fixed', right: '0', bottom: '0', width: '0', height: '0', border: '0' });
+                win.document.body.appendChild(printFrame);
+
+                let htmlContent = "";
+
+                if (isBasketArray) {
+                    htmlContent = contentData.map(b =>
+                        `<div style="margin-bottom:20px; border-bottom:1px dashed #ccc; padding-bottom:10px;">
+                            <div style="font-size:10px; color:#666; margin-bottom:5px;">
+                                Source: ${escapeHTML(b.source)} | ${new Date(b.timestamp).toLocaleString()}
+                            </div>
+                            <div style="white-space: pre-wrap; font-family: sans-serif; font-size:12px; line-height:1.5;">${escapeHTML(b.text)}</div>
+                         </div>`
+                    ).join('');
+                } else {
+                    htmlContent = `<div style="white-space: pre-wrap; font-family: 'Segoe UI', sans-serif; font-size:12px; line-height:1.6;">${escapeHTML(contentData)}</div>`;
+                }
+
+                const docFrame = printFrame.contentWindow.document;
+                docFrame.open();
+                docFrame.write(`
+                    <html>
+                        <head><title>${name}</title></head>
+                        <body style="font-family:sans-serif; padding:40px;">
+                            <h2 style="border-bottom:2px solid #000; padding-bottom:10px; margin-bottom:20px;">${name}</h2>
+                            ${htmlContent}
+                            <div style="margin-top:50px; font-size:10px; color:#999; text-align:center;">Exported via Context-Carry</div>
+                        </body>
+                    </html>
+                `);
+                docFrame.close();
+
+                setTimeout(() => {
+                    printFrame.contentWindow.focus();
+                    printFrame.contentWindow.print();
+                    setTimeout(() => printFrame.remove(), 1000);
+                }, 500);
+
+            } else {
+                let textContent = "";
+
+                if (isBasketArray) {
+                    if (format === 'md') {
+                        textContent = contentData.map(b => `### Source: ${b.source}\n*${new Date(b.timestamp).toLocaleString()}*\n\n${b.text}`).join('\n\n---\n\n');
+                    } else {
+                        textContent = contentData.map(b => `[Source: ${b.source} | Time: ${new Date(b.timestamp).toLocaleString()}]\n${b.text}`).join('\n\n====================\n\n');
+                    }
+                } else {
+                    textContent = contentData;
+                }
+
+                const blob = new Blob([textContent], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = win.document.createElement('a');
+                a.href = url;
+                a.download = `${name}.${format}`;
+                win.document.body.appendChild(a);
+                a.click();
+                win.document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                overlay.remove();
+            }
+        };
+
+        overlay.appendChild(card);
+        doc.body.appendChild(overlay);
+        inputName.focus();
+    }
+
+    function showPiPExportModal(win) {
+        getBasket((basket) => {
+            showUniversalExportModal(win, basket, 'basket-export');
+        });
+    }
+
+    function showPiPConfirmModal(win, title, message, onConfirm) {
+        const doc = win.document;
+        const t = LANG_DATA[state.lang];
+
+        const overlay = doc.createElement('div');
+        Object.assign(overlay.style, {
+            position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+            background: 'rgba(0,0,0,0.6)', zIndex: 9999,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backdropFilter: 'blur(2px)', opacity: '0', transition: 'opacity 0.2s'
+        });
+
+        const card = doc.createElement('div');
+        Object.assign(card.style, {
+            width: '320px',
+            background: 'var(--card-bg)',
+            border: '1px solid var(--border)',
+            borderTop: '3px solid #ff5252',
+            borderRadius: '8px', padding: '20px',
+            boxShadow: '0 10px 40px rgba(0,0,0,0.5)',
+            color: 'var(--text)',
+            fontFamily: 'Segoe UI, sans-serif',
+            display: 'flex', flexDirection: 'column', gap: '15px',
+            transform: 'scale(0.9)', transition: 'transform 0.2s'
+        });
+
+        card.innerHTML = `
+            <div style="font-size:16px; font-weight:bold; color:#ff5252; display:flex; align-items:center; gap:8px;">
+                <span>⚠️ ${title}</span>
+            </div>
+            <div style="font-size:13px; color:var(--text); line-height:1.5; opacity:0.9;">
+                ${message}
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+                <button id="btn-cancel" style="background:transparent; border:1px solid var(--border); color:var(--text-dim); padding:6px 16px; cursor:pointer; border-radius:4px; font-size:12px;">
+                    ${t.pip_modal_cancel}
+                </button>
+                <button id="btn-confirm" style="background:#ff5252; border:none; color:#fff; padding:6px 16px; cursor:pointer; border-radius:4px; font-weight:bold; font-size:12px; box-shadow: 0 2px 5px rgba(255, 82, 82, 0.4);">
+                    ${t.pip_modal_confirm}
+                </button>
+            </div>
+        `;
+
+        overlay.appendChild(card);
+        doc.body.appendChild(overlay);
+
+        requestAnimationFrame(() => {
+            overlay.style.opacity = '1';
+            card.style.transform = 'scale(1)';
+        });
+
+
+        const close = () => {
+            overlay.style.opacity = '0';
+            card.style.transform = 'scale(0.9)';
+            setTimeout(() => overlay.remove(), 200);
+        };
+
+        card.querySelector('#btn-cancel').onclick = close;
+
+        card.querySelector('#btn-confirm').onclick = () => {
+            close();
+            if (onConfirm) onConfirm();
+        };
+
+        overlay.onclick = (e) => {
+            if (e.target === overlay) close();
+        };
+    }
+
+    function showMainConfirmModal(title, message, onConfirm) {
+        const isZh = state.lang === 'zh';
+        const txtConfirm = isZh ? '確認' : 'Confirm';
+        const txtCancel = isZh ? '取消' : 'Cancel';
+
+        const overlay = document.createElement('div');
+        Object.assign(overlay.style, {
+            position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+            background: 'rgba(0,0,0,0.6)', zIndex: 2147483660,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backdropFilter: 'blur(2px)', opacity: '0', transition: 'opacity 0.2s'
+        });
+
+        const card = document.createElement('div');
+        Object.assign(card.style, {
+            width: '320px', background: '#1e1e1e', border: '1px solid #444',
+            borderTop: '3px solid #ff5252', borderRadius: '8px', padding: '20px',
+            boxShadow: '0 10px 40px rgba(0,0,0,0.5)', color: '#fff',
+            fontFamily: 'Segoe UI, sans-serif', display: 'flex', flexDirection: 'column', gap: '15px',
+            transform: 'scale(0.9)', transition: 'transform 0.2s'
+        });
+
+        card.innerHTML = `
+        <div style="font-size:16px; font-weight:bold; color:#ff5252; display:flex; align-items:center; gap:8px;">
+            <span>⚠️ ${title}</span>
+        </div>
+        <div style="font-size:13px; color:#ddd; line-height:1.5;">${message}</div>
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+            <button id="btn-cancel" style="background:transparent; border:1px solid #555; color:#ccc; padding:6px 16px; cursor:pointer; border-radius:4px; font-size:12px;">${txtCancel}</button>
+            <button id="btn-confirm" style="background:#ff5252; border:none; color:#fff; padding:6px 16px; cursor:pointer; border-radius:4px; font-weight:bold; font-size:12px;">${txtConfirm}</button>
+        </div>
+    `;
+
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+
+        requestAnimationFrame(() => { overlay.style.opacity = '1'; card.style.transform = 'scale(1)'; });
+
+        const close = () => {
+            overlay.style.opacity = '0'; card.style.transform = 'scale(0.9)';
+            setTimeout(() => overlay.remove(), 200);
+        };
+
+        card.querySelector('#btn-cancel').onclick = close;
+        card.querySelector('#btn-confirm').onclick = () => { close(); if (onConfirm) onConfirm(); };
+        overlay.onclick = (e) => { if (e.target === overlay) close(); };
+    }
+
+    function initPiPLogic(win) {
+        const doc = win.document;
+        const t = LANG_DATA[state.lang];
+        const canvas = doc.getElementById('pip-canvas');
+        const svg = doc.getElementById('svg-layer');
+        const miniBasket = doc.getElementById('mini-basket');
+        const mbToggle = doc.getElementById('mb-toggle');
+
+        win.pipLoopLimit = 1;
+        win.isPiPStopped = false;
+
+        const loopSel = doc.getElementById('pip-loop-select');
+        if (loopSel) {
+            loopSel.onchange = (e) => { win.pipLoopLimit = parseInt(e.target.value); };
+        }
+
+        const btnStop = doc.getElementById('btn-stop-pip');
+        if (btnStop) {
+            btnStop.onclick = () => {
+                win.isPiPStopped = true;
+                btnStop.innerText = "🛑";
+                showToast("Stopping...", doc);
+                setTimeout(() => {
+                    win.isPiPStopped = false;
+                    btnStop.innerText = "⏹";
+                }, 2000);
+            };
+        }
+
+        mbToggle.onclick = () => miniBasket.classList.toggle('open');
+
+        const btnMax = doc.getElementById('btn-pip-max');
+        btnMax.onclick = () => {
+            const screenAvailW = win.screen.availWidth;
+            const screenAvailH = win.screen.availHeight;
+            const screenAvailL = win.screen.availLeft || 0;
+            const screenAvailT = win.screen.availTop || 0;
+
+            const isMaximized = (Math.abs(win.outerWidth - screenAvailW) < 50) && (Math.abs(win.outerHeight - screenAvailH) < 50);
+
+            if (isMaximized) {
+                const restoreW = 1000;
+                const restoreH = 800;
+                const left = screenAvailL + (screenAvailW - restoreW) / 2;
+                const top = screenAvailT + (screenAvailH - restoreH) / 2;
+                win.resizeTo(restoreW, restoreH);
+                win.moveTo(left, top);
+            } else {
+                win.moveTo(screenAvailL, screenAvailT);
+                setTimeout(() => {
+                    win.resizeTo(screenAvailW, screenAvailH);
+                }, 50);
+            }
+        };
+
+        const btnTheme = doc.getElementById('btn-pip-theme');
+        if (btnTheme) {
+            btnTheme.onclick = () => {
+                const nextTheme = state.theme === 'dark' ? 'light' : 'dark';
+                applyTheme(nextTheme);
+            };
+        }
+
+        const pipTmplSelect = doc.getElementById('pip-template-select');
+        if (pipTmplSelect) {
+            pipTmplSelect.onchange = (e) => {
+                const key = e.target.value;
+                if (!key || !WORKFLOW_TEMPLATES[key]) return;
+
+                showPiPConfirmModal(win, "Load Template?", "Current workflow will be cleared.", () => {
+                    const tmpl = WORKFLOW_TEMPLATES[key];
+                    state.multiPanelConfigs = [];
+                    state.workflowConnections = [];
+
+                    tmpl.nodes.forEach(n => {
+                        state.multiPanelConfigs.push({
+                            id: Date.now() + n.id,
+                            context: n.context,
+                            config: state.aiConfig || {},
+                            x: n.x, y: n.y,
+                            responseText: "", runCount: 0,
+                            customTitle: n.title
+                        });
+                    });
+
+                    if (state.multiPanelConfigs.length > 0 && tmpl.nodes.length > 0) {
+                        const baseId = state.multiPanelConfigs[0].id - tmpl.nodes[0].id;
+                        if (tmpl.connections) {
+                            tmpl.connections.forEach(c => {
+                                state.workflowConnections.push({
+                                    from: baseId + c.from,
+                                    to: baseId + c.to,
+                                    id: Date.now() + Math.random()
+                                });
+                            });
+                        }
+                    }
+
+                    const tabFlow = doc.getElementById('tab-flow');
+                    if (tabFlow) tabFlow.click();
+
+                    renderPiPNodes(win);
+                    renderPiPConnections(win);
+                    pipTmplSelect.value = "";
+                });
+            };
+        }
+
+        doc.body.addEventListener('dragover', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (!e.dataTransfer.types.includes('application/cc-pip-sort') &&
+                !e.dataTransfer.types.includes('application/cc-pip-basket-item') &&
+                !e.dataTransfer.types.includes('application/cc-pip-tag')) {
+                e.dataTransfer.dropEffect = 'copy';
+                doc.body.classList.add('drag-active');
+            }
+        });
+        doc.body.addEventListener('dragleave', (e) => {
+            if (e.relatedTarget === null) doc.body.classList.remove('drag-active');
+        });
+        doc.body.addEventListener('drop', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            doc.body.classList.remove('drag-active');
+
+            if (e.dataTransfer.types.includes('application/cc-pip-sort') ||
+                e.dataTransfer.types.includes('application/cc-pip-basket-item') ||
+                e.dataTransfer.types.includes('application/cc-pip-tag')) return;
+
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                Array.from(e.dataTransfer.files).forEach(file => {
+                    const reader = new FileReader();
+                    reader.onload = (ev) => addToBasket(ev.target.result, file.name + " (File)", []);
+                    reader.readAsText(file);
+                });
+            } else {
+                const text = e.dataTransfer.getData('text/plain');
+                if (text) addToBasket(text, "External Drop", []);
+            }
+        });
+
+        const tabCollect = doc.getElementById('tab-collect');
+        const tabFlow = doc.getElementById('tab-flow');
+        const viewCollect = doc.getElementById('view-collect');
+        const viewFlow = doc.getElementById('view-flow');
+        const btnSettings = doc.getElementById('btn-pip-settings');
+
+        tabCollect.onclick = () => {
+            tabCollect.classList.add('active'); tabFlow.classList.remove('active');
+            viewCollect.classList.add('active'); viewFlow.classList.remove('active');
+        };
+        tabFlow.onclick = () => {
+            tabFlow.classList.add('active'); tabCollect.classList.remove('active');
+            viewFlow.classList.add('active'); viewCollect.classList.remove('active');
+            renderMiniBasket(win);
+        };
+        if (doc.getElementById('view-collect').classList.contains('active')) {
+            doc.getElementById('pip-template-select').style.display = 'none';
+        }
+
+        btnSettings.onclick = () => {
+            openRobotSettings(null, () => {
+                renderPiPNodes(win);
+            }, win.document);
+        };
+
+        doc.getElementById('btn-pip-paste').onclick = async () => {
+            try {
+                const text = await win.navigator.clipboard.readText();
+                if (text && text.trim().length > 0) {
+                    addToBasket(text, "Clipboard", []);
+                    showToast(t.pip_toast_pasted, win.document);
+                } else {
+                    showToast(t.pip_toast_empty, win.document);
+                }
+            } catch (e) {
+                showToast(t.pip_toast_perm, win.document);
+            }
+        };
+
+        const btnExport = doc.getElementById('btn-pip-export');
+        if (btnExport) {
+            btnExport.onclick = () => {
+                showPiPExportModal(win);
+            };
+        }
+
+        doc.getElementById('btn-pip-clear').onclick = () => {
+            showPiPConfirmModal(
+                win,
+                t.pip_modal_clear_title,
+                t.pip_modal_clear_msg,
+                () => {
+                    basketOp({ kind: 'CLEAR' }, () => {
+                        renderPiPList(win);
+                        renderMiniBasket(win);
+                        const countBadge = win.document.getElementById('mb-count');
+                        if (countBadge) countBadge.innerText = '0';
+                        updateBasketUI();
+
+                        const list = win.document.getElementById('pip-list');
+                        if (list) list.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-dim); font-size:11px;">${t.pip_toast_cleared}</div>`;
+
+                        showToast(t.pip_toast_cleared, win.document);
+                    });
+                }
+            );
+        };
+
+        doc.getElementById('btn-add-node').onclick = () => {
+            state.multiPanelConfigs.push({ id: Date.now(), context: "", config: state.aiConfig || {}, x: 50, y: 50, responseText: "", runCount: 0 });
+            renderPiPNodes(win);
+        };
+        doc.getElementById('btn-run-all').onclick = () => {
+            handlePiPRunAll(win);
+        };
+
+        initPiPWorkflow(win);
+        renderPiPList(win);
+    }
+
+    function showPiPEditor(title, initialValue, upstreamContent, onSave, win) {
+        const doc = win.document;
+        const overlay = doc.createElement('div');
+        Object.assign(overlay.style, {
+            position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+            background: 'rgba(0,0,0,0.85)', zIndex: 1000, display: 'flex',
+            flexDirection: 'column', padding: '10px', boxSizing: 'border-box'
+        });
+
+        const header = doc.createElement('div');
+        header.style.cssText = "display:flex; justify-content:space-between; color:#fff; margin-bottom:10px; font-weight:bold; align-items:center;";
+
+        const titleDiv = doc.createElement('div');
+        titleDiv.style.cssText = "display:flex; gap:10px; align-items:center;";
+        titleDiv.innerHTML = `<span>✏️ ${title}</span>`;
+
+        const btnPreview = doc.createElement('button');
+        btnPreview.style.cssText = "background:#333; border:1px solid #555; color:#ccc; border-radius:4px; cursor:pointer; font-size:11px; padding:2px 8px; min-width:80px;";
+
+        let previewState = 0;
+
+        const updatePreviewBtn = () => {
+            if (previewState === 0) {
+                btnPreview.innerHTML = "👁️ View HTML";
+                btnPreview.style.background = "#333";
+                btnPreview.style.color = "#ccc";
+            } else if (previewState === 1) {
+                btnPreview.innerHTML = "📄 View Markdown";
+                btnPreview.style.background = "#4CAF50";
+                btnPreview.style.color = "#fff";
+            } else {
+                btnPreview.innerHTML = "✏️ Edit";
+                btnPreview.style.background = "#2196F3";
+                btnPreview.style.color = "#fff";
+            }
+        };
+        updatePreviewBtn();
+
+        btnPreview.onclick = () => {
+            const ta = overlay.querySelector('textarea');
+            const pre = overlay.querySelector('.pip-md-preview');
+            const hFrame = overlay.querySelector('.pip-html-preview');
+            const upPreview = overlay.querySelector('.pip-upstream-preview');
+
+            previewState = (previewState + 1) % 3;
+
+            ta.style.display = 'none';
+            pre.style.display = 'none';
+            hFrame.style.display = 'none';
+            if (upPreview) upPreview.style.display = 'none';
+
+            if (previewState === 0) {
+                hFrame.srcdoc = "";
+                ta.style.display = 'block';
+                if (upPreview) upPreview.style.display = 'block';
+                requestAnimationFrame(() => ta.focus());
+
+            } else if (previewState === 1) {
+                hFrame.style.display = 'block';
+                const raw = ta.value || "";
+                const docHtml = sanitizeHtmlForPreview(ensureHtmlDoc(raw));
+
+                setTimeout(() => {
+                    hFrame.srcdoc = docHtml;
+                }, 0);
+
+            } else {
+                hFrame.srcdoc = "";
+                pre.style.display = 'block';
+                pre.innerHTML = simpleMarkdownParser(ta.value || "");
+            }
+            updatePreviewBtn();
+        };
+        titleDiv.appendChild(btnPreview);
+        header.appendChild(titleDiv);
+
+        const closeBtn = doc.createElement('button');
+        closeBtn.innerHTML = '✕';
+        closeBtn.style.cssText = "background:none; border:none; color:#aaa; font-size:16px; cursor:pointer;";
+        closeBtn.onclick = () => overlay.remove();
+        header.appendChild(closeBtn);
+
+        const contentWrapper = doc.createElement('div');
+        contentWrapper.style.cssText = "flex:1; display:flex; flex-direction:column; overflow:hidden; position:relative;";
+
+        if (upstreamContent) {
+            const upstreamDiv = doc.createElement('div');
+            upstreamDiv.className = 'pip-upstream-preview';
+            Object.assign(upstreamDiv.style, {
+                padding: '8px 10px',
+                background: 'rgba(255,255,255,0.05)',
+                color: '#888',
+                borderBottom: '1px solid #444',
+                fontSize: '11px',
+                maxHeight: '80px',
+                overflowY: 'auto',
+                whiteSpace: 'pre-wrap',
+                fontFamily: 'monospace',
+                flexShrink: '0',
+                position: 'relative',
+                marginBottom: '5px'
+            });
+
+            const closeUpBtn = doc.createElement('button');
+            closeUpBtn.innerHTML = '✕';
+            closeUpBtn.title = "Hide Upstream Preview";
+            Object.assign(closeUpBtn.style, {
+                position: 'absolute', top: '2px', right: '4px',
+                background: 'transparent', border: 'none', color: '#666',
+                cursor: 'pointer', fontSize: '10px'
+            });
+            closeUpBtn.onclick = () => {
+                upstreamDiv.remove();
+            };
+
+            const label = doc.createElement('div');
+            label.style.marginBottom = '2px';
+            label.innerHTML = `<span style="color:#0088cc; font-weight:bold; font-size:10px;">🔌 Upstream Input</span>`;
+
+            const textDiv = doc.createElement('div');
+            textDiv.textContent = upstreamContent;
+            textDiv.style.opacity = '0.8';
+
+            upstreamDiv.append(closeUpBtn, label, textDiv);
+            contentWrapper.appendChild(upstreamDiv);
+        }
+
+        const textarea = doc.createElement('textarea');
+        textarea.value = initialValue || "";
+        textarea.style.cssText = "flex:1; background:#111; color:#ddd; border:1px solid #444; padding:10px; resize:none; font-family:monospace; margin-bottom:10px; outline:none;";
+        textarea.placeholder = "Enter prompt context here...";
+
+        const previewDiv = doc.createElement('div');
+        previewDiv.className = 'pip-md-preview';
+        previewDiv.style.cssText = "flex:1; background:#111; color:#ddd; border:1px solid #444; padding:10px; overflow-y:auto; display:none; margin-bottom:10px; font-family:Segoe UI, sans-serif; line-height:1.6;";
+
+        const htmlFrame = doc.createElement('iframe');
+        htmlFrame.className = 'pip-html-preview';
+        htmlFrame.style.cssText = "flex:1; background:#fff; border:1px solid #444; display:none; margin-bottom:10px;";
+        htmlFrame.setAttribute('sandbox', 'allow-scripts');
+
+        contentWrapper.append(textarea, previewDiv, htmlFrame);
+
+        const footer = doc.createElement('div');
+        footer.style.cssText = "display:flex; justify-content:flex-end; gap:8px;";
+
+        const saveBtn = doc.createElement('button');
+        saveBtn.innerText = "Save";
+        saveBtn.style.cssText = "background:#00d2ff; color:#000; border:none; padding:6px 12px; border-radius:4px; font-weight:bold; cursor:pointer;";
+        saveBtn.onclick = () => {
+            onSave(textarea.value);
+            overlay.remove();
+        };
+
+        footer.appendChild(saveBtn);
+        overlay.append(header, contentWrapper, footer);
+        doc.body.appendChild(overlay);
+        textarea.focus();
+    }
+
+    function addToBasket(text, source, tags = []) {
+        basketOp({
+            kind: 'ADD',
+            item: { text: text, timestamp: Date.now(), source: source, tags: tags }
+        }, () => {
+            updateBasketUI();
+            if (state.pipWindow) {
+                renderPiPList(state.pipWindow);
+                renderMiniBasket(state.pipWindow);
+            }
+            if (typeof updateHoverCardUI === 'function') {
+                updateHoverCardUI();
+            }
+        });
+    }
+
+    function runPiPNode(node, win, forceSingleRun = false) {
+        if (win.isPiPStopped) return;
+
+        const loopMax = win.pipLoopLimit || 1;
+        if (!forceSingleRun && node.runCount >= loopMax) return;
+
+        const el = win.document.getElementById(`pip-node-${node.id}`);
+        if (!el) return;
+
+        const statusTxt = el.querySelector('.node-status');
+        const outArea = el.querySelector('.node-output');
+
+        if (!node.config || (!node.config.apiKey && !['local', 'ollama', 'lm-studio'].includes(node.config?.provider))) {
+            if (state.aiConfig && state.aiConfig.configured) {
+                node.config = { ...state.aiConfig };
+                const uiEl = win.document.getElementById(`pip-node-${node.id}`);
+                if (uiEl) {
+                    const sel = uiEl.querySelector('.node-select');
+                    if (sel) sel.value = state.aiConfig.name;
+                }
+            }
+        }
+
+        const isLocal = ['local', 'ollama', 'lm-studio', 'lm_studio'].includes(node.config?.provider);
+
+        if (!node.config || (!node.config.apiKey && !isLocal)) {
+            statusTxt.innerText = 'Config Error';
+            statusTxt.className = 'node-status busy';
+            statusTxt.style.color = '#f00';
+            outArea.value = "[Error] No valid API Configuration found for this node.\nPlease select a valid profile in the node's dropdown.";
+            return;
+        }
+
+        node.responseText = "";
+        if (outArea) outArea.value = "";
+
+        statusTxt.className = 'node-status busy';
+        statusTxt.innerText = `RUNNING (${(node.runCount || 0) + 1}/${forceSingleRun ? 1 : loopMax})`;
+
+        node.runCount = (node.runCount || 0) + 1;
+        node.isFinished = false;
+
+        let finalPrompt = node.context || "";
+
+        const incomingIds = state.workflowConnections
+            .filter(c => parseInt(c.to) === node.id)
+            .map(c => parseInt(c.from));
+
+        if (incomingIds.length > 0) {
+            const inputs = incomingIds.map(pid => {
+                const parent = state.multiPanelConfigs.find(p => p.id === pid);
+                if (parent && parent.responseText) {
+                    return `\n\n--- Input from Node #${String(pid).slice(-3)} ---\n${parent.responseText}`;
+                }
+                return "";
+            }).join("");
+            finalPrompt += inputs;
+        }
+
+        callAiStreaming(finalPrompt, node.config, {
+            append: (chunk) => {
+                if (win.isPiPStopped) return;
+                node.responseText += chunk;
+                if (win && !win.closed && outArea) {
+                    outArea.value = node.responseText;
+                    outArea.scrollTop = outArea.scrollHeight;
+                }
+            },
+            done: () => {
+                const currentNodeExists = state.multiPanelConfigs.find(n => n.id === node.id);
+                if (!currentNodeExists) return;
+                if (win.isPiPStopped) return;
+                statusTxt.className = 'node-status ok';
+                statusTxt.innerText = 'DONE';
+                node.isFinished = true;
+
+                const downstream = state.workflowConnections.filter(c => c.from === node.id);
+                downstream.forEach(conn => {
+                    const targetNode = state.multiPanelConfigs.find(n => n.id === conn.to);
+                    if (targetNode) {
+                        const parentIds = state.workflowConnections.filter(c => c.to === targetNode.id).map(c => c.from);
+                        const allParentsDone = parentIds.every(pid => {
+                            const p = state.multiPanelConfigs.find(n => n.id === pid);
+                            return p && p.runCount >= targetNode.runCount + 1 && p.isFinished;
+                        });
+
+                        if (allParentsDone) {
+                            runPiPNode(targetNode, win);
+                        }
+                    }
+                });
+            },
+            error: (err) => {
+                statusTxt.innerText = 'ERROR';
+                statusTxt.style.color = '#f00';
+                if (outArea) outArea.value += `\n[Error]: ${err}`;
+                node.isFinished = true;
+                node.hasError = true;
+                failDownstream(node.id, err, true);
+            }
+        });
+    }
+
+    function handlePiPRunAll(win) {
+        win.isPiPStopped = false;
+
+        state.multiPanelConfigs.forEach(p => p.runCount = 0);
+
+        const dests = new Set(state.workflowConnections.map(c => c.to));
+        const roots = state.multiPanelConfigs.filter(p => !dests.has(p.id));
+
+        if (roots.length === 0 && state.multiPanelConfigs.length > 0) {
+            runPiPNode(state.multiPanelConfigs[0], win);
+        } else {
+            const loops = win.pipLoopLimit || 1;
+            roots.forEach(node => {
+                for (let i = 0; i < loops; i++) {
+                    setTimeout(() => runPiPNode(node, win), i * 1000);
+                }
+            });
+        }
+    }
+
+    let currentTagFilter = 'all';
+
+    function renderPiPList(win) {
+        const container = win.document.getElementById('pip-list');
+        const tagBar = win.document.getElementById('collect-tag-bar');
+        const t = LANG_DATA[state.lang];
+
+        chrome.storage.local.get(['cc_basket', 'cc_user_tags'], (res) => {
+            const basket = res.cc_basket || [];
+            let userTags = res.cc_user_tags || ['Important', 'To-Do', 'Reference'];
+
+            tagBar.innerHTML = '';
+            const allPill = win.document.createElement('div');
+            allPill.className = `tag-pill ${currentTagFilter === 'all' ? 'active' : ''}`;
+            allPill.innerText = t.pip_tag_all;
+            allPill.onclick = () => { currentTagFilter = 'all'; renderPiPList(win); };
+            tagBar.appendChild(allPill);
+
+            userTags.forEach(tag => {
+                const p = win.document.createElement('div');
+                p.className = `tag-pill ${currentTagFilter === tag ? 'active' : ''}`;
+                p.innerText = tag;
+                p.draggable = true;
+
+                p.ondragstart = (e) => {
+                    e.dataTransfer.setData('application/cc-pip-tag', tag);
+                    p.style.opacity = '0.5';
+                };
+                p.ondragend = () => p.style.opacity = '1';
+                p.onclick = () => { currentTagFilter = tag; renderPiPList(win); };
+                tagBar.appendChild(p);
+            });
+
+            if (userTags.length < 8) {
+                const addWrapper = win.document.createElement('div');
+                addWrapper.className = 'tag-add-btn';
+                addWrapper.innerText = '+';
+                addWrapper.onclick = (e) => {
+                    e.stopPropagation();
+                    const input = win.document.createElement('input');
+                    input.className = 'tag-input-field';
+                    input.placeholder = 'Tag Name';
+                    input.addEventListener('keydown', (ev) => {
+                        if (ev.key === 'Enter') {
+                            const newTag = input.value.trim();
+                            if (newTag && !userTags.includes(newTag)) {
+                                userTags.push(newTag);
+                                chrome.storage.local.set({ 'cc_user_tags': userTags }, () => {
+                                    renderPiPList(win);
+                                    if (win.document.getElementById('view-flow').classList.contains('active')) {
+                                        renderMiniBasket(win);
+                                    }
+                                });
+                            } else {
+                                renderPiPList(win);
+                            }
+                        } else if (ev.key === 'Escape') {
+                            renderPiPList(win);
+                        }
+                    });
+                    tagBar.replaceChild(input, addWrapper);
+                    input.focus();
+                };
+                tagBar.appendChild(addWrapper);
+            }
+
+            container.innerHTML = '';
+            const filteredBasket = currentTagFilter === 'all'
+                ? basket
+                : basket.filter(item => item.tags && item.tags.includes(currentTagFilter));
+
+            if (filteredBasket.length === 0) {
+                container.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-dim); font-size:11px;">${t.pip_empty_list}</div>`;
+                return;
+            }
+
+            filteredBasket.forEach((item, index) => {
+                const realIndex = basket.indexOf(item);
+                const el = win.document.createElement('div');
+                el.className = 'pip-item';
+                el.draggable = true;
+
+                const timeStr = new Date(item.timestamp).toLocaleTimeString();
+                const tagsHtml = (item.tags && item.tags.length > 0)
+                    ? item.tags.map(t => `<span class="mini-tag">#${t}</span>`).join('')
+                    : '';
+
+                el.innerHTML = `
+                    <div class="pip-item-meta">
+                        <span>${escapeHTML(item.source)}</span><span>${timeStr}</span>
+                    </div>
+                    <div class="pip-item-content">${escapeHTML(item.text.substring(0, 100))}...</div>
+                    <div class="item-tags" style="display:flex; gap:4px; flex-wrap:wrap; margin-top:4px; min-height:16px;">${tagsHtml}</div>
+                    <div class="btn-item-action">
+                        <div class="act-btn del" title="${t.pip_confirm_del_item}">✕</div>
+                    </div>
+                `;
+
+                const contentDiv = el.querySelector('.pip-item-content');
+                el.ondblclick = (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+
+                    showPiPEditor("Edit Item", item.text, (newText) => {
+                        if (newText === item.text) return;
+
+                        const id = item.id;
+                        if (!id) return;
+
+                        updateBasketItemText(id, newText, () => {
+                            renderPiPList(win);
+
+                            const mb = win.document.getElementById('mini-basket');
+                            if (mb && mb.classList.contains('open')) {
+                                renderMiniBasket(win);
+                            }
+                        });
+                    }, win);
+                };
+
+                el.ondragstart = (e) => {
+                    e.dataTransfer.setData('text/plain', item.text);
+                    e.dataTransfer.setData('application/cc-pip-basket-item', item.text);
+                    if (currentTagFilter === 'all') {
+                        e.dataTransfer.setData('application/cc-pip-sort-id', item.id);
+                    }
+                    el.classList.add('dragging');
+                };
+
+                el.ondragend = () => el.classList.remove('dragging');
+
+                el.ondragover = (e) => {
+                    if (e.dataTransfer.types.includes('application/cc-pip-tag')) {
+                        e.preventDefault();
+                        el.classList.add('tag-hover');
+                    } else if (currentTagFilter === 'all' && e.dataTransfer.types.includes('application/cc-pip-sort-id')) {
+                        e.preventDefault();
+                        el.style.borderTop = '2px solid #00d2ff';
+                    }
+                };
+
+                el.ondragleave = () => {
+                    el.classList.remove('tag-hover');
+                    el.style.borderTop = '';
+                };
+
+                el.ondrop = (e) => {
+                    e.preventDefault();
+                    el.classList.remove('tag-hover');
+                    el.style.borderTop = '';
+
+                    if (e.dataTransfer.types.includes('application/cc-pip-tag')) {
+                        const tag = e.dataTransfer.getData('application/cc-pip-tag');
+                        if (!tag) return;
+
+                        const id = item.id;
+                        if (!id) return;
+
+                        const currentTags = Array.isArray(item.tags) ? item.tags : [];
+                        if (currentTags.includes(tag)) return;
+
+                        const newTags = [...currentTags, tag];
+
+                        updateBasketItemPatch(id, { tags: newTags }, () => {
+                            renderPiPList(win);
+
+                            const mb = win.document.getElementById('mini-basket');
+                            if (mb && mb.classList.contains('open')) {
+                                renderMiniBasket(win);
+                            }
+                        });
+
+                        return;
+                    }
+
+                    if (currentTagFilter === 'all' && e.dataTransfer.types.includes('application/cc-pip-sort-id')) {
+                        const fromId = e.dataTransfer.getData('application/cc-pip-sort-id');
+                        const toId = item.id;
+                        if (!fromId || !toId || fromId === toId) return;
+
+                        const order = basket.map(it => it.id).filter(Boolean);
+                        const fromIndex = order.indexOf(fromId);
+                        const toIndex = order.indexOf(toId);
+                        if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+
+                        const [moved] = order.splice(fromIndex, 1);
+                        order.splice(toIndex, 0, moved);
+
+                        basketOp({ kind: 'REORDER', order }, () => renderPiPList(win));
+                    }
+                };
+
+                el.querySelector('.act-btn.del').onclick = () => {
+                    const id = item.id;
+                    if (!id) return;
+                    basketOp({ kind: 'DELETE', id }, () => {
+                        renderPiPList(win); renderMiniBasket(win);
+                    });
+                };
+
+                container.appendChild(el);
+            });
+        });
+    }
+
+    function initPiPWorkflow(win) {
+        const doc = win.document;
+        const canvas = doc.getElementById('pip-canvas');
+        const svg = doc.getElementById('svg-layer');
+        const miniBasket = doc.getElementById('mini-basket');
+        const mbToggle = doc.getElementById('mb-toggle');
+
+        mbToggle.onclick = () => miniBasket.classList.toggle('open');
+
+        doc.getElementById('btn-add-node').onclick = () => {
+            state.multiPanelConfigs.push({
+                id: Date.now(),
+                context: "",
+                config: state.aiConfig || {},
+                x: 50, y: 50,
+                responseText: "",
+                runCount: 0
+            });
+            renderPiPNodes(win);
+        };
+
+        doc.getElementById('btn-run-all').onclick = () => {
+            handlePiPRunAll(win);
+        };
+        renderPiPNodes(win);
+        renderPiPConnections(win);
+    }
+
+    function renderPiPNodes(win) {
+        const canvas = win.document.getElementById('pip-canvas');
+        const t = LANG_DATA[state.lang];
+        Array.from(canvas.querySelectorAll('.pip-node')).forEach(n => n.remove());
+
+        state.multiPanelConfigs.forEach(node => {
+            const el = win.document.createElement('div');
+            el.className = 'pip-node';
+            el.style.left = (node.x || 50) + 'px';
+            el.style.top = (node.y || 50) + 'px';
+            el.id = `pip-node-${node.id}`;
+
+            if ((!node.config || !node.config.name) && state.allAiConfigs.length > 0) {
+                node.config = state.allAiConfigs[0];
+            }
+
+            const modelName = node.config?.name || 'No Config';
+            let statusText = t.pip_node_idle;
+            if (node.isFinished && node.responseText) statusText = t.pip_node_done;
+
+            const displayTitle = escapeHTML(node.customTitle ? node.customTitle : `#${String(node.id).slice(-3)}`);
+
+            el.innerHTML = `
+                <div class="connector conn-in" data-pid="${node.id}" data-type="input"></div>
+                
+                <div class="node-header">
+                    <span class="node-title">${displayTitle}</span>
+                    <span class="node-status ${node.responseText ? 'ok' : ''}">${statusText}</span>
+                </div>
+                
+                <div class="node-body">
+                    <div class="node-controls">
+                        <select class="node-select" title="Select AI Config">
+                            <option>${modelName}</option>
+                        </select>
+                        <div class="node-icon-btn run" title="${t.pip_tooltip_run_node}">▶</div>
+                        <div class="node-icon-btn edit" title="${t.pip_tooltip_edit_node}">✏️</div>
+                        <div class="node-icon-btn del" title="${t.pip_tooltip_del_node}">✕</div>
+                    </div>
+                    <textarea class="node-output" placeholder="${t.pip_node_ph}"></textarea>
+                </div>
+
+                <div class="connector conn-out" data-pid="${node.id}" data-type="output"></div>
+            `;
+
+            const sel = el.querySelector('.node-select');
+            sel.innerHTML = '';
+            (state.allAiConfigs || []).forEach(cfg => {
+                const opt = win.document.createElement('option');
+                opt.value = cfg.name;
+                opt.innerText = cfg.name;
+                if (node.config && node.config.name === cfg.name) opt.selected = true;
+                sel.appendChild(opt);
+            });
+
+            sel.onchange = (e) => {
+                const selectedName = e.target.value;
+                const foundConfig = state.allAiConfigs.find(c => c.name === selectedName);
+                if (foundConfig) {
+                    node.config = foundConfig;
+                }
+            };
+
+            el.querySelector('.edit').onclick = (e) => {
+                e.stopPropagation();
+
+                let upstreamText = "";
+                const incomingIds = state.workflowConnections
+                    .filter(c => parseInt(c.to) === node.id)
+                    .map(c => parseInt(c.from));
+
+                if (incomingIds.length > 0) {
+                    upstreamText = incomingIds.map(pid => {
+                        const parent = state.multiPanelConfigs.find(p => p.id === pid);
+                        if (parent && parent.responseText) {
+                            return `[From # ${String(pid).slice(-3)}]:\n${parent.responseText.substring(0, 200)}...`;
+                        }
+                        return null;
+                    }).filter(Boolean).join("\n\n");
+                }
+
+                showPiPEditor(`Edit Node #${node.id}`, node.context, upstreamText, (val) => {
+                    node.context = val;
+                    if (!node.responseText) el.querySelector('.node-output').value = val;
+                }, win);
+            };
+
+            el.querySelector('.run').onclick = async (e) => {
+                e.stopPropagation();
+
+                const currentSelection = sel.value;
+                const activeConfig = state.allAiConfigs.find(c => c.name === currentSelection);
+                if (activeConfig) node.config = activeConfig;
+
+                win.isPiPStopped = false;
+                node.runCount = 0;
+                node.isFinished = false;
+                node.responseText = "";
+
+                const outArea = el.querySelector('.node-output');
+                if (outArea) outArea.value = "";
+
+                const statusEl = el.querySelector('.node-status');
+                if (statusEl) {
+                    statusEl.innerText = "Waiting...";
+                    statusEl.className = 'node-status busy';
+                }
+
+                if (typeof runPiPNode === 'function') {
+                    runPiPNode(node, win, true);
+                } else {
+                    console.error("Context-Carry: runPiPNode function missing.");
+                }
+            };
+
+            el.querySelector('.del').onclick = (e) => {
+                e.stopPropagation();
+                state.multiPanelConfigs = state.multiPanelConfigs.filter(n => n.id !== node.id);
+                state.workflowConnections = state.workflowConnections.filter(c => c.from !== node.id && c.to !== node.id);
+                renderPiPNodes(win);
+                renderPiPConnections(win);
+            };
+
+            const outArea = el.querySelector('.node-output');
+            outArea.oninput = (e) => {
+                if (!node.responseText) node.context = e.target.value;
+            };
+            outArea.onmousedown = (e) => e.stopPropagation();
+
+            const header = el.querySelector('.node-header');
+            header.onmousedown = (e) => {
+                e.stopPropagation();
+                let startX = e.clientX;
+                let startY = e.clientY;
+                let origX = node.x || 50;
+                let origY = node.y || 50;
+
+                const onMove = (mv) => {
+                    node.x = origX + (mv.clientX - startX);
+                    node.y = origY + (mv.clientY - startY);
+                    el.style.left = node.x + 'px';
+                    el.style.top = node.y + 'px';
+                    renderPiPConnections(win);
+                };
+                const onUp = () => {
+                    win.removeEventListener('mousemove', onMove);
+                    win.removeEventListener('mouseup', onUp);
+                };
+                win.addEventListener('mousemove', onMove);
+                win.addEventListener('mouseup', onUp);
+            };
+
+            el.ondragover = (e) => {
+                if (e.dataTransfer.types.includes('application/cc-pip-basket-item')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    el.classList.add('drag-target');
+                }
+            };
+            el.ondragleave = () => el.classList.remove('drag-target');
+            el.ondrop = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                el.classList.remove('drag-target');
+                const text = e.dataTransfer.getData('application/cc-pip-basket-item');
+                if (text) {
+                    node.context = (node.context ? node.context + "\n\n" : "") + text;
+                    if (!node.responseText) outArea.value = node.context;
+
+                    el.style.boxShadow = "0 0 20px var(--success)";
+                    setTimeout(() => el.style.boxShadow = "", 500);
+                }
+            };
+
+            const connOut = el.querySelector('.conn-out');
+            connOut.onmousedown = (e) => {
+                e.stopPropagation(); e.preventDefault();
+                startPiPConnection(win, e, node.id);
+            };
+
+            canvas.appendChild(el);
+            const textArea = el.querySelector('.node-output');
+            if (textArea) {
+                textArea.value = node.responseText || node.context || '';
+            }
+        });
+    }
+
+    function renderPiPConnections(win) {
+        const svg = win.document.getElementById('svg-layer');
+        while (svg.lastChild && svg.lastChild.tagName === 'path') {
+            svg.removeChild(svg.lastChild);
+        }
+
+        state.workflowConnections.forEach(conn => {
+            const fromEl = win.document.querySelector(`#pip-node-${conn.from} .conn-out`);
+            const toEl = win.document.querySelector(`#pip-node-${conn.to} .conn-in`);
+
+            if (fromEl && toEl) {
+                const canvasRect = win.document.getElementById('pip-canvas').getBoundingClientRect();
+                const fRect = fromEl.getBoundingClientRect();
+                const tRect = toEl.getBoundingClientRect();
+
+                const x1 = (fRect.left - canvasRect.left) + 5;
+                const y1 = (fRect.top - canvasRect.top) + 5;
+                const x2 = (tRect.left - canvasRect.left) + 5;
+                const y2 = (tRect.top - canvasRect.top) + 5;
+
+                const d = `M ${x1} ${y1} C ${x1 + 50} ${y1}, ${x2 - 50} ${y2}, ${x2} ${y2}`;
+
+                const path = win.document.createElementNS("http://www.w3.org/2000/svg", "path");
+                path.setAttribute("stroke-width", "4");
+                path.style.cursor = "pointer";
+                path.style.pointerEvents = "stroke";
+                path.setAttribute("d", d);
+                path.setAttribute("stroke", "#666");
+                path.setAttribute("fill", "none");
+                path.setAttribute("marker-end", "url(#arrow)");
+                path.onclick = () => {
+                    showPiPConfirmModal(win, "Delete Connection?", "Remove this link between nodes?", () => {
+                        state.workflowConnections = state.workflowConnections.filter(c => c !== conn);
+                        renderPiPConnections(win);
+                    });
+                };
+                svg.appendChild(path);
+            }
+        });
+    }
+
+    function startPiPConnection(win, evt, startId) {
+        const svg = win.document.getElementById('svg-layer');
+        const tempPath = win.document.createElementNS("http://www.w3.org/2000/svg", "path");
+        tempPath.setAttribute("stroke", "#fff");
+        tempPath.setAttribute("stroke-width", "2");
+        tempPath.setAttribute("stroke-dasharray", "5,5");
+        tempPath.setAttribute("fill", "none");
+        tempPath.style.pointerEvents = "none";
+        svg.appendChild(tempPath);
+
+        const canvasRect = win.document.getElementById('pip-canvas').getBoundingClientRect();
+        const startEl = win.document.querySelector(`#pip-node-${startId} .conn-out`);
+        const sRect = startEl.getBoundingClientRect();
+        const x1 = (sRect.left - canvasRect.left) + 5;
+        const y1 = (sRect.top - canvasRect.top) + 5;
+
+        const onMove = (e) => {
+            const x2 = e.clientX - canvasRect.left;
+            const y2 = e.clientY - canvasRect.top;
+            const d = `M ${x1} ${y1} C ${x1 + 50} ${y1}, ${x2 - 50} ${y2}, ${x2} ${y2}`;
+            tempPath.setAttribute("d", d);
+        };
+
+        const onUp = (e) => {
+            win.removeEventListener('mousemove', onMove);
+            win.removeEventListener('mouseup', onUp);
+            tempPath.remove();
+
+            const target = win.document.elementFromPoint(e.clientX, e.clientY);
+            if (target && target.classList.contains('conn-in')) {
+                const endId = parseInt(target.dataset.pid);
+                if (endId !== startId) {
+                    state.workflowConnections.push({ from: startId, to: endId, id: Date.now() });
+                    renderPiPConnections(win);
+                }
+            }
+        };
+
+        win.addEventListener('mousemove', onMove);
+        win.addEventListener('mouseup', onUp);
+    }
+
+    let miniBasketFilter = 'all';
+
+    function renderMiniBasket(win) {
+        const list = win.document.getElementById('mb-list');
+        const countBadge = win.document.getElementById('mb-count');
+        const flowTagBar = win.document.getElementById('flow-tag-bar');
+
+        getBasket((basket) => {
+            if (countBadge) countBadge.innerText = basket.length;
+
+            chrome.storage.local.get(['cc_user_tags'], (res) => {
+                let userTags = res.cc_user_tags || ['Important', 'To-Do', 'Reference'];
+
+                flowTagBar.innerHTML = '';
+
+                const createPill = (text, val) => {
+                    const p = win.document.createElement('div');
+                    p.className = `tag-pill ${miniBasketFilter === val ? 'active' : ''}`;
+                    p.innerText = text;
+                    p.onclick = () => { miniBasketFilter = val; renderMiniBasket(win); };
+                    return p;
+                };
+
+                flowTagBar.appendChild(createPill("All", 'all'));
+                userTags.forEach(tag => {
+                    flowTagBar.appendChild(createPill(tag, tag));
+                });
+
+                list.innerHTML = '';
+                const filtered = miniBasketFilter === 'all'
+                    ? basket
+                    : basket.filter(item => item.tags && item.tags.includes(miniBasketFilter));
+
+                if (filtered.length === 0) {
+                    list.innerHTML = `<div style="text-align:center; color:#444; font-size:10px; padding:10px;">Empty</div>`;
+                    return;
+                }
+
+                filtered.forEach((item, index) => {
+                    const el = win.document.createElement('div');
+                    el.className = 'mb-item';
+                    el.draggable = true;
+
+                    const tagLabel = (item.tags && item.tags.length) ? ` <span style="color:#00d2ff; font-size:9px;">#${item.tags[0]}</span>` : '';
+                    el.innerHTML = `${item.text.substring(0, 30)}...${tagLabel}`;
+
+                    el.ondragstart = (e) => {
+                        e.dataTransfer.setData('application/cc-pip-basket-item', item.text);
+                        e.dataTransfer.setData('text', item.text);
+                        e.dataTransfer.effectAllowed = 'copy';
+                    };
+                    list.appendChild(el);
+                });
+            });
+        });
+    }
+
+    /* =========================================
+       Helper: Get Text 
+    ========================================= */
+    function t(key) {
+        const dict = state.langData[state.lang] || state.langData['en'];
+        return dict ? (dict[key] || key) : key;
+    }
+
+    injectStyles();
 })();

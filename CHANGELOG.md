@@ -3,6 +3,48 @@
 All notable changes to this project will be documented in this file.
 
 ------------------------------------------------------------------------
+## [1.5.1] - 2025-12-17
+
+### 🚀 New Features
+
+#### Multi-Model Arena (Quad-View)
+- **4-Split Screen:**
+  Added a powerful **Quad-View** mode allowing users to run up to 4 AI models simultaneously in a single window.
+- **Context Sync:**
+  Implemented a **"Align All"** button (`btn_align`) to instantly replicate the context from one panel to all active panels for consistent testing.
+- **Model Comparison:**
+  Users can now configure different models (e.g., GPT-4o vs Claude 3.5 vs Local Llama 3) in each quadrant to compare reasoning capabilities side-by-side.
+
+#### Transport Drone (Floating Collector)
+- **Draggable FAB:**
+  Introduced the **"Transport Drone"** (`cc-drone-fab`), a persistent floating icon that remains on screen when the main panel is closed.
+- **Quick Drop:**
+  Users can drag text directly onto the Drone to save it to the Basket without interrupting their reading flow.
+- **Position Memory:**
+  The Drone remembers its last screen position between sessions (`cc_drone_position`).
+
+#### Configuration Management
+- **JSON Import/Export:**
+  Added support for exporting and importing AI configurations (API Keys, Endpoints, Model names) as JSON files. Users can now easily backup or switch between different setups.
+
+### 🔒 Privacy & Security
+
+#### "Bring Your Own Key" (BYO Key) Gate
+- **Unlock Protocol:**
+  Implemented a strict **Feature Unlock** modal that explicitly informs users about the "Client-Side Only" architecture and local storage of API keys before enabling AI features.
+- **Safety Checks:**
+  Added validation logic for API Keys (checking prefixes like `sk-` for OpenAI/Anthropic) to prevent configuration errors.
+
+### 🛠️ Improvements
+
+- **Local LLM Robustness:**
+  - Expanded `manifest.json` host permissions to support a wide range of local development ports (`11434`, `1234`, `8080`, `5000`, `7860`, `3000`) for tools like Ollama, LM Studio, and LocalAI.
+  - Improved the `GET_OLLAMA_MODELS` action in `background.js` to intelligently fallback between `/api/tags` and `/v1/models` endpoints for better compatibility.
+- **UI Refinements:**
+  - Added specific styling for **Quad-View** grids (`cc-multi-panel-grid`) and responsive layouts.
+  - Improved the "Saved" indicator animations in the AI settings panel.
+
+------------------------------------------------------------------------
 
 ## [1.5.0] - 2025-12-15
 

@@ -1,90 +1,115 @@
-# Context-Carry  
+# Context-Carry
 ### Move your context across ChatGPT, Claude, Gemini & Grok — instantly.
 
-[![Chrome Web Store](https://img.shields.io/badge/Chrome_Web_Store-Available-blue?logo=google-chrome&logoColor=white)](https://chromewebstore.google.com/detail/okjnafabngnahdppmbnmefofokpegccm?utm_source=item-share-cb)
+[![Chrome Web Store](https://img.shields.io/badge/Chrome_Web_Store-Available-blue?logo=google-chrome&logoColor=white)](https://chromewebstore.google.com/detail/okjnafabngnahdppmbnmefofokpegccm)
 [![中文說明](https://img.shields.io/badge/Language-繁體中文-blue)](README_zh-TW.md)
-![Version](https://img.shields.io/badge/version-1.5.0-blue)
+![Version](https://img.shields.io/badge/version-1.6.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-**Context-Carry** is a lightweight Chrome extension that lets you capture, clean, and transfer text between AI platforms — without copy-paste and without formatting issues.
+**Context-Carry** is a lightweight Chrome extension that helps you capture, clean, organize, and send text or code between AI tools — no messy formatting, no painful copy-paste.
 
 ---
 
-## 🚀 Quick Start
-1. Open any webpage or AI chat  
-2. Capture content via **➕ / Paintbrush / Drag & Drop**  
-3. Store it in the **Context Basket**  
-4. Drag it anywhere or auto-fill into another AI chat
+## Quick Start
+1. **Select & Capture** — use **➕ button** or **Paintbrush (`Alt + C`)**
+2. **Organize** — reorder or edit snippets in the **Context Basket**
+3. **Drop & Send**
+   - Drag to the **Transport Drone** widget
+   - Send to **ChatGPT / Claude / Gemini / Grok / Local LLM**
+4. **Workflow (Canvas)** — connect nodes to run up to **10 models** in a chain
+5. **Compare (Multi-Node View)** — run up to **3 models side-by-side**
 
 ---
 
-## ✨ Features
-- Capture text from **any webpage or AI conversation**
-- Visual **Area Selection (Paintbrush Mode)**
-- **Context Basket** for staging and reordering snippets
-- Drag snippets **from web → basket → anywhere**
-- Import local `.txt` / `.md` files
-- Clean Markdown output with token estimation
-- One-click transfer to **ChatGPT / Claude / Gemini / Grok**
-- Optional **local AI (Ollama)** & **xAI (Grok) API** support
+## Features
+- 📥 **Universal Capture** (any webpage or AI chat)
+- 🖌️ **Visual Paintbrush Select** (`Alt + C`)
+- 🧺 **Context Basket** (edit, reorder, stage)
+- 🚁 **Transport Drone** (floating drag-and-drop widget)
+- 🤖 **Multi-Node Compare** (max 3 parallel models)
+- 🧠 **Workflow Canvas** (max 10 model pipeline)
+- 📂 **File Import** (`.txt`, `.md`, `.json`, code files)
+- 🏠 **Local LLM Support** (Ollama / LM Studio via `localhost`)
+- 🔑 **BYO API Keys** (stored locally, never uploaded)
 
 ---
 
-## 🎥 Demo
-![Context-Carry Demo](screenshots/demo_ai.gif)
+## Demo
 
-![Context-Carry Demo](screenshots/demo_v1.5.gif)
+<table>
+  <tr>
+    <td width="48%">
+      <h3 align="center">Multi-Node View</h3>
+      <img src="screenshots_git/node.webp" width="100%" />
+    </td>
+    <td width="48%">
+      <h3 align="center">PIP Mode</h3>
+      <img src="screenshots_git/pip.webp" width="100%" />
+    </td>
+  </tr>
 
-![Context-Carry Demo](screenshots/circle.gif)
+  <tr>
+    <td width="30%">
+      <h3 align="center">Simple Collect</h3>
+      <img src="screenshots_git/flight.webp" width="100%" />
+    </td>
+    <td width="30%">
+      <h3 align="center">Circle Select</h3>
+      <img src="screenshots_git/circle.webp" width="100%" />
+    </td>
+    <td width="30%">
+      <h3 align="center">Drag & Drop</h3>
+      <img src="screenshots_git/drag.webp" width="100%" />
+    </td>
+  </tr>
 
-![Context-Carry Demo](screenshots/drag.gif)
-
-![Context-Carry Demo](screenshots/demo_carrier.gif)
+  <tr>
+    <td width="48%">
+      <h3 align="center">Cross-Window</h3>
+      <img src="screenshots_git/cross_window.webp" width="100%" />
+    </td>
+    <td width="48%">
+      <h3 align="center">Cross-Window Input</h3>
+      <img src="screenshots_git/cross_input.webp" width="100%" />
+    </td>
+  </tr>
+</table>
 
 ---
 
-## 🔧 Installation
-### Chrome Web Store
+## Installation
+### 1) From Chrome Web Store (Recommended)
 [Install from Chrome Web Store](https://chromewebstore.google.com/detail/okjnafabngnahdppmbnmefofokpegccm)
 
-### Manual  
-1. Download this repo  
-2. Visit `chrome://extensions/`  
-3. Enable **Developer Mode**  
-4. Load unpacked → select folder  
+### 2) Manual Install (Developer Mode)
+1. Download this repo
+2. Open Extensions page
+3. Enable **Developer Mode**
+4. Click **Load unpacked**
+5. Select the extension folder
 
 ---
 
-## ⌨️ Shortcuts
+## Shortcuts
 | Hotkey | Action |
 |--------|--------|
 | **Alt + M** | Toggle panel |
 | **Alt + C** | Paintbrush capture |
-| **Alt + L** | Switch language |
+| **Alt + L** | Switch UI language |
 
 ---
 
-## 🔐 Privacy
-- 100% local processing  
-- No data collection 
-- Auto-clears temporary context on browser restart 
-
----
-
-## 🤝 Contribute
+## Contribute
 ```bash
 git clone https://github.com/gordonsay/Context-Carry.git
 ```
 
----
-
 ## Privacy & License
 [README (繁體中文)](README_zh-TW.md) | [Privacy Policy](PRIVACY.md) | [License (MIT)](LICENSE)
 
----
-
-## ❤️ Support
+## Support
 If this extension saved you time, consider buying me a coffee!
+
 <a href="https://www.buymeacoffee.com/gordonsay">
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="150" />
 </a>
