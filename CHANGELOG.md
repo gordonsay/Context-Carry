@@ -1,6 +1,56 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+------------------------------------------------------------------------
+## [1.6.0] - 2025-12-25
+
+### 🚀 New Features
+
+#### Visual Workflow Canvas (Node Editor)
+- **Freestyle Node Interface:**
+  Introduced a fully interactive **Canvas Mode** where users can drag, drop, and connect multiple AI nodes visually.
+- **Prompt Chaining:**
+  Implemented logical connections where the output of one node (Parent) automatically feeds into the context of connected nodes (Child).
+- **Workflow Templates:**
+  Added built-in templates for common tasks:
+  - **Summary & Keywords:** Chains a summarizer node into a keyword extractor.
+  - **Translate & Polish:** Chains a translator into a tone polisher.
+  - **Code Review:** Splits code into a "Bug Finder" and "Optimizer" running in parallel, feeding into a "Documenter".
+
+#### "Neural Data Pod" (Dedicated PiP Window)
+- **Detached Interface:**
+  Added support for the Document Picture-in-Picture API, allowing users to pop out the extension into a persistent, independent window (`Alt + P` or via menu).
+- **Dual View Modes:**
+  - **Collect View:** Dedicated interface for managing the Context Basket and organizing data tags.
+  - **Flow View:** A maximized version of the Workflow Canvas for complex node orchestration.
+
+#### Semantic Tagging System
+- **Custom Tags:**
+  Users can now tag basket items (e.g., `#Important`, `#ToDo`, `#Reference`) for better organization.
+- **Filtering:**
+  Added a filter bar in both the Drone and PiP windows to view basket items by specific tags.
+
+#### Universal Export & PDF
+- **PDF Support:**
+  Added **PDF (Print View)** to the export options, rendering basket content into a clean, printable format.
+- **Import/Export Basket:**
+  Users can now export the entire basket state or import external datasets into the current session.
+
+### 🛠️ Improvements
+
+- **Task Queue Engine:**
+  Implemented `AI_QUEUE` to manage concurrent AI requests and prevent browser throttling when running complex multi-node flows.
+- **Loop Control:**
+  Added iteration controls (Run 1x, 2x... 10x) allowing workflows to self-loop for iterative refinement or bulk generation.
+- **Cycle Detection:**
+  Added intelligent safeguards to prevent infinite loops when connecting nodes in circular dependencies.
+
+### ⚡ Core Architecture
+
+- **Theme Consistency:**
+  Unified theming logic across the Main Panel, Robot Interface, Drone, and PiP Window (Dark/Light mode synchronization).
+- **Local Model Fetching:**
+  Enhanced the configuration modal to dynamically fetch and list available models from local endpoints (Ollama/LM Studio) automatically.
 
 ------------------------------------------------------------------------
 ## [1.5.1] - 2025-12-17
