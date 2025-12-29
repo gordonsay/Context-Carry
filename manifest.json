@@ -51,7 +51,8 @@
                 "assets_style.js",
                 "assets_lang.js",
                 "config.js",
-                "content.js"
+                "content.js",
+                "lib/html2pdf.bundle.min.js"
             ],
             "run_at": "document_end"
         }

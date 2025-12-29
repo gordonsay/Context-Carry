@@ -1632,6 +1632,7 @@
                 <div class="cc-list-container" id="cc-list-container"></div>
                 <div class="cc-card-footer">
                     <button class="cc-btn-xs cc-btn-primary-xs" id="cc-paste-btn">📋 Paste</button>
+                    <button class="cc-btn-xs" id="cc-export-btn" title="Export / Format">📤</button>
                     <button class="cc-btn-xs" id="cc-clear-btn" title="Clear">🗑️</button>
                     <button class="cc-btn-xs" id="cc-expand-btn" title="Expand">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1757,6 +1758,19 @@
                 updateDroneVisuals();
             };
 
+            const exportBtn = card.querySelector('#cc-export-btn');
+            if (exportBtn) {
+                exportBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    card.classList.remove('visible');
+                    const currentBasket = basket || [];
+                    if (currentBasket.length === 0) {
+                        showToast("Basket is empty!");
+                        return;
+                    }
+                    showUniversalExportModal(window, currentBasket, 'drone-export-' + Date.now());
+                };
+            }
 
             card.querySelector('#cc-paste-btn').onclick = (e) => {
                 e.stopPropagation();
@@ -4334,6 +4348,9 @@
             });
             delBtn.onclick = (e) => {
                 e.stopPropagation();
+                if (tooltip) {
+                    tooltip.style.display = 'none';
+                }
                 row.classList.add('cc-deleting');
                 setTimeout(() => handleDeleteSingleItem(item.id || row.dataset.id, row), 300);
             };
@@ -7695,7 +7712,10 @@
 
     function showUniversalExportModal(win, contentData, defaultFilename = 'export') {
         const doc = win.document;
-        const t = LANG_DATA[state.lang];
+        const tpack = (typeof LANG_DATA !== 'undefined' && LANG_DATA && state && state.lang && LANG_DATA[state.lang])
+            ? LANG_DATA[state.lang]
+            : {};
+        const T = (k, fallback) => tpack[k] || fallback;
 
         const existing = doc.querySelector('.mech-config-overlay');
         if (existing) existing.remove();
@@ -7710,26 +7730,28 @@
 
         card.innerHTML = `
             <div class="mech-config-header">
-                <span>${t.pip_export_title || 'EXPORT / SAVE'}</span>
-            </div>
-            
-            <div class="mech-field">
-                <span class="mech-label">${t.pip_label_filename || 'FILE NAME'}</span>
-                <input type="text" id="exp-name" class="mech-input" value="${escapeHTML(defaultFilename)}" placeholder="Enter filename">
+                <span>${T('pip_export_title', 'EXPORT / SAVE')}</span>
             </div>
 
             <div class="mech-field">
-                <span class="mech-label">${t.pip_label_format || 'FORMAT'}</span>
+                <span class="mech-label">${T('pip_label_filename', 'FILE NAME')}</span>
+                <input type="text" id="exp-name" class="mech-input"
+                    value="${escapeHTML(defaultFilename)}" placeholder="Enter filename">
+            </div>
+
+            <div class="mech-field">
+                <span class="mech-label">${T('pip_label_format', 'FORMAT')}</span>
                 <select id="exp-format" class="mech-select">
                     <option value="txt">Text File (.txt)</option>
                     <option value="md">Markdown (.md)</option>
-                    <option value="pdf">PDF (Print View)</option>
+                    <option value="pdf_direct">PDF (Direct Download - Layout may vary)</option>
+                    <option value="pdf_printer">PDF (System Print - Best Layout)</option>
                 </select>
             </div>
 
             <div class="mech-btn-group">
-                <button id="btn-cancel" class="mech-cancel-btn">${t.pip_modal_cancel || 'Cancel'}</button>
-                <button id="btn-save" class="mech-action-btn">${t.pip_btn_save_export || 'Export'}</button>
+                <button id="btn-cancel" class="mech-cancel-btn">${T('pip_modal_cancel', 'Cancel')}</button>
+                <button id="btn-save" class="mech-action-btn">${T('pip_btn_save_export', 'Export')}</button>
             </div>
         `;
 
@@ -7740,76 +7762,143 @@
 
         btnCancel.onclick = () => overlay.remove();
 
+        const isBasketArray = Array.isArray(contentData);
+
+        const generateHTMLContent = () => {
+            if (isBasketArray) {
+                return contentData.map(b =>
+                    `<div style="margin-bottom:20px; border-bottom:1px dashed #ccc; padding-bottom:10px;">
+                    <div style="font-size:10px; color:#666; margin-bottom:5px;">
+                        Source: ${escapeHTML(b?.source || 'Unknown')} | ${new Date(b?.timestamp || Date.now()).toLocaleString()}
+                    </div>
+                    <div style="white-space: pre-wrap; font-family: sans-serif; font-size:12px; line-height:1.5;">${escapeHTML(b?.text || '')}</div>
+                 </div>`
+                ).join('');
+            }
+            return `<div style="white-space: pre-wrap; font-family: 'Segoe UI', sans-serif; font-size:12px; line-height:1.6;">${escapeHTML(contentData ?? '')}</div>`;
+        };
+
+        const generateTextContent = (format) => {
+            if (isBasketArray) {
+                if (format === 'md') {
+                    return contentData
+                        .map(b => `### Source: ${b?.source || 'Unknown'}\n*${new Date(b?.timestamp || Date.now()).toLocaleString()}*\n\n${b?.text || ''}`)
+                        .join('\n\n---\n\n');
+                }
+                return contentData
+                    .map(b => `[Source: ${b?.source || 'Unknown'} | Time: ${new Date(b?.timestamp || Date.now()).toLocaleString()}]\n${b?.text || ''}`)
+                    .join('\n\n====================\n\n');
+            }
+            return (contentData ?? '').toString();
+        };
+
+        const downloadTextFile = (name, format) => {
+            const textContent = generateTextContent(format);
+            const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = doc.createElement('a');
+            a.href = url;
+            a.download = `${name}.${format}`;
+            doc.body.appendChild(a);
+            a.click();
+            doc.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        };
+
+        const printViaIframe = (name) => {
+            const printFrame = doc.createElement('iframe');
+            Object.assign(printFrame.style, { position: 'fixed', right: '0', bottom: '0', width: '0', height: '0', border: '0' });
+            doc.body.appendChild(printFrame);
+
+            const htmlContent = generateHTMLContent();
+            const docFrame = printFrame.contentWindow.document;
+
+            docFrame.open();
+            docFrame.write(`
+            <html>
+                <head>
+                    <title>${escapeHTML(name)}</title>
+                    <style>
+                        @media print {
+                            @page { margin: 15mm; size: A4; }
+                            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                        }
+                        body { font-family: sans-serif; padding: 40px; color: #000; }
+                        img { max-width: 100%; }
+                    </style>
+                </head>
+                <body>
+                    <h2 style="border-bottom:2px solid #000; padding-bottom:10px; margin-bottom:20px;">${escapeHTML(name)}</h2>
+                    ${htmlContent}
+                    <div style="margin-top:50px; font-size:10px; color:#999; text-align:center;">Exported via Context-Carry</div>
+                </body>
+            </html>
+        `);
+            docFrame.close();
+
+            setTimeout(() => {
+                printFrame.contentWindow.focus();
+                printFrame.contentWindow.print();
+                setTimeout(() => printFrame.remove(), 1000);
+            }, 500);
+        };
+
+        const pdfDirectDownload = (name) => {
+            if (typeof html2pdf === 'undefined') {
+                alert("Error: html2pdf library not found. Please use 'PDF (System Print)' mode.");
+                return;
+            }
+
+            btnSave.disabled = true;
+            const oldText = btnSave.textContent;
+            btnSave.textContent = 'Generating...';
+
+            const element = doc.createElement('div');
+            element.style.cssText = "padding: 40px; font-family: sans-serif; color: #000; background: #fff; width: 800px;";
+            element.innerHTML = `
+            <h2 style="border-bottom:2px solid #000; padding-bottom:10px; margin-bottom:20px;">${escapeHTML(name)}</h2>
+            ${generateHTMLContent()}
+            <div style="margin-top:50px; font-size:10px; color:#999; text-align:center;">Exported via Context-Carry</div>
+        `;
+
+            const opt = {
+                margin: 10,
+                filename: `${name}.pdf`,
+                image: { type: 'jpeg', quality: 0.98 },
+                html2canvas: { scale: 2, useCORS: true },
+                jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+                pagebreak: { mode: 'avoid-all' }
+            };
+
+            html2pdf().set(opt).from(element).save()
+                .then(() => {
+                    overlay.remove();
+                })
+                .catch(err => {
+                    console.error(err);
+                    alert("Generation failed. Try 'PDF (System Print)' mode.");
+                    btnSave.disabled = false;
+                    btnSave.textContent = oldText;
+                });
+        };
+
         btnSave.onclick = () => {
             const name = inputName.value.trim() || 'export';
             const format = selectFormat.value;
-            const isBasketArray = Array.isArray(contentData);
 
-            if (format === 'pdf') {
+            if (format === 'pdf_printer') {
                 overlay.remove();
-                const printFrame = win.document.createElement('iframe');
-                Object.assign(printFrame.style, { position: 'fixed', right: '0', bottom: '0', width: '0', height: '0', border: '0' });
-                win.document.body.appendChild(printFrame);
-
-                let htmlContent = "";
-
-                if (isBasketArray) {
-                    htmlContent = contentData.map(b =>
-                        `<div style="margin-bottom:20px; border-bottom:1px dashed #ccc; padding-bottom:10px;">
-                            <div style="font-size:10px; color:#666; margin-bottom:5px;">
-                                Source: ${escapeHTML(b.source)} | ${new Date(b.timestamp).toLocaleString()}
-                            </div>
-                            <div style="white-space: pre-wrap; font-family: sans-serif; font-size:12px; line-height:1.5;">${escapeHTML(b.text)}</div>
-                         </div>`
-                    ).join('');
-                } else {
-                    htmlContent = `<div style="white-space: pre-wrap; font-family: 'Segoe UI', sans-serif; font-size:12px; line-height:1.6;">${escapeHTML(contentData)}</div>`;
-                }
-
-                const docFrame = printFrame.contentWindow.document;
-                docFrame.open();
-                docFrame.write(`
-                    <html>
-                        <head><title>${name}</title></head>
-                        <body style="font-family:sans-serif; padding:40px;">
-                            <h2 style="border-bottom:2px solid #000; padding-bottom:10px; margin-bottom:20px;">${name}</h2>
-                            ${htmlContent}
-                            <div style="margin-top:50px; font-size:10px; color:#999; text-align:center;">Exported via Context-Carry</div>
-                        </body>
-                    </html>
-                `);
-                docFrame.close();
-
-                setTimeout(() => {
-                    printFrame.contentWindow.focus();
-                    printFrame.contentWindow.print();
-                    setTimeout(() => printFrame.remove(), 1000);
-                }, 500);
-
-            } else {
-                let textContent = "";
-
-                if (isBasketArray) {
-                    if (format === 'md') {
-                        textContent = contentData.map(b => `### Source: ${b.source}\n*${new Date(b.timestamp).toLocaleString()}*\n\n${b.text}`).join('\n\n---\n\n');
-                    } else {
-                        textContent = contentData.map(b => `[Source: ${b.source} | Time: ${new Date(b.timestamp).toLocaleString()}]\n${b.text}`).join('\n\n====================\n\n');
-                    }
-                } else {
-                    textContent = contentData;
-                }
-
-                const blob = new Blob([textContent], { type: 'text/plain' });
-                const url = URL.createObjectURL(blob);
-                const a = win.document.createElement('a');
-                a.href = url;
-                a.download = `${name}.${format}`;
-                win.document.body.appendChild(a);
-                a.click();
-                win.document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-                overlay.remove();
+                printViaIframe(name);
+                return;
             }
+
+            if (format === 'pdf_direct') {
+                pdfDirectDownload(name);
+                return;
+            }
+
+            downloadTextFile(name, format);
+            overlay.remove();
         };
 
         overlay.appendChild(card);

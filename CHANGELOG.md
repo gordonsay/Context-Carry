@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 ------------------------------------------------------------------------
+## [1.6.1] - 2025-12-29
+
+### 🚀 New Features
+
+#### Transport Drone (Floating Collector)
+- **Save Button in Drone Mode:**
+  Added a dedicated **Save / Export** button directly in **Drone Mode** for quick exporting without opening the main panel.
+- **PDF Direct Download (html2pdf):**
+  Extended the Save options to include **PDF (Direct Download)** powered by `html2pdf.bundle.min.js` for one-click PDF export.
+
+### 🐛 Fixes
+- **Basket Preview Residue:**
+  Fixed an issue where the Basket preview window/overlay could remain on screen after closing or switching modes.
+  
+------------------------------------------------------------------------
 ## [1.6.0] - 2025-12-25
 
 ### 🚀 New Features
