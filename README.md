@@ -102,14 +102,6 @@ git clone https://github.com/gordonsay/Context-Carry.git
 
 ---
 
-## Important Development Notes
-
-### Modifications to `html2pdf.bundle.min.js`
-To comply with the Chrome Extension Manifest V3 **Blue Argon (Remote Hosted Code)** policy, `lib/html2pdf.bundle.min.js` has been manually patched. **Do not directly update or overwrite this file.**
-
-* **Modification Details**: The hardcoded CDN link (`https://cdnjs...`) for `pdfobject.min.js` was removed from the source code.
-* **Mechanism**: The local file path (`lib/pdfobject.min.js`) is injected dynamically via the `opt.pdfObjectUrl` parameter in `content.js`.
-* **Update Instructions**: If this library needs to be updated in the future, you must re-apply this patch (search for the CDN URL in the source code and clear it).
 
 ## Privacy & License
 [README (繁體中文)](README_zh-TW.md) | [Privacy Policy](PRIVACY.md) | [License](LICENSE)
